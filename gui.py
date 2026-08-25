@@ -390,7 +390,7 @@ def draw_side_panel(screen, gamestate, show_hint=False, hint_move=None, board_fl
 
     # ─── Turn indicator ───
     is_white = gamestate.current_turn == 'w'
-    turn_str = "● Ход белых" if is_white else "● Ход чёрных"
+    turn_str = "● White to move" if is_white else "● Black to move"
     dot_color = (240, 240, 240) if is_white else (80, 80, 80)
     turn_rect = pygame.Rect(px, y, pw, 30)
     pygame.draw.rect(screen, (52, 50, 48), turn_rect, border_radius=5)
@@ -405,7 +405,7 @@ def draw_side_panel(screen, gamestate, show_hint=False, hint_move=None, board_fl
     hand_pad = 4
 
     for color in ['w', 'b']:
-        label = "Рука белых" if color == 'w' else "Рука чёрных"
+        label = "White's hand" if color == 'w' else "Black's hand"
         label_surf = FONT_STATUS.render(label, True, (160, 160, 160))
         screen.blit(label_surf, (px, y))
         y += label_surf.get_height() + 4
@@ -463,16 +463,16 @@ def draw_side_panel(screen, gamestate, show_hint=False, hint_move=None, board_fl
 
     # Row 1: Undo + New Game
     undo_rect = pygame.Rect(px, y, btn_w, btn_h)
-    _draw_button(screen, undo_rect, "⟲ Отменить", HIGHLIGHT_COLORS['undo'])
+    _draw_button(screen, undo_rect, "Undo", HIGHLIGHT_COLORS['undo'])
     ui_elements['buttons']['undo_button'] = undo_rect
 
     if gamestate.checkmate or gamestate.stalemate:
         ng_rect = pygame.Rect(px + btn_w + 8, y, btn_w, btn_h)
-        _draw_button(screen, ng_rect, "Новая игра", (30, 130, 60))
+        _draw_button(screen, ng_rect, "New Game", (30, 130, 60))
         ui_elements['buttons']['new_game_button'] = ng_rect
     else:
         ng_rect = pygame.Rect(px + btn_w + 8, y, btn_w, btn_h)
-        _draw_button(screen, ng_rect, "Новая игра", (60, 60, 58))
+        _draw_button(screen, ng_rect, "New Game", (60, 60, 58))
         ui_elements['buttons']['new_game_button'] = ng_rect
     y += btn_h + 8
 
@@ -482,10 +482,10 @@ def draw_side_panel(screen, gamestate, show_hint=False, hint_move=None, board_fl
     tw_rect = pygame.Rect(px, y, btn_w, btn_h)
     tb_rect = pygame.Rect(px + btn_w + 8, y, btn_w, btn_h)
     _draw_button(screen, tw_rect,
-                 f"ИИ Б: {'ВКЛ' if ai_w_active else 'выкл'}",
+                 f"AI White: {'ON' if ai_w_active else 'off'}",
                  HIGHLIGHT_COLORS['toggle_ai_active'] if ai_w_active else HIGHLIGHT_COLORS['toggle_ai'])
     _draw_button(screen, tb_rect,
-                 f"ИИ Ч: {'ВКЛ' if ai_b_active else 'выкл'}",
+                 f"AI Black: {'ON' if ai_b_active else 'off'}",
                  HIGHLIGHT_COLORS['toggle_ai_active'] if ai_b_active else HIGHLIGHT_COLORS['toggle_ai'])
     ui_elements['buttons']['toggle_white_ai'] = tw_rect
     ui_elements['buttons']['toggle_black_ai'] = tb_rect
@@ -494,7 +494,7 @@ def draw_side_panel(screen, gamestate, show_hint=False, hint_move=None, board_fl
     # Row 3: Hint toggle (full width)
     hint_rect = pygame.Rect(px, y, pw, btn_h)
     hint_bg = HIGHLIGHT_COLORS['hint_active'] if show_hint else HIGHLIGHT_COLORS['hint']
-    hint_label = "💡 Подсказка: ВКЛ" if show_hint else "💡 Подсказка: выкл"
+    hint_label = "Hint: ON" if show_hint else "Hint: off"
     _draw_button(screen, hint_rect, hint_label, hint_bg)
     ui_elements['buttons']['toggle_hint'] = hint_rect
     y += btn_h + 6
@@ -502,7 +502,7 @@ def draw_side_panel(screen, gamestate, show_hint=False, hint_move=None, board_fl
     # Row 4: Flip board toggle (full width)
     flip_rect = pygame.Rect(px, y, pw, btn_h)
     flip_bg = (80, 120, 80) if board_flipped else (60, 60, 58)
-    flip_label = "🔄 Доска: перевёрнута" if board_flipped else "🔄 Перевернуть доску"
+    flip_label = "Board: flipped" if board_flipped else "Flip board"
     _draw_button(screen, flip_rect, flip_label, flip_bg)
     ui_elements['buttons']['toggle_flip'] = flip_rect
     y += btn_h + 6
@@ -510,12 +510,12 @@ def draw_side_panel(screen, gamestate, show_hint=False, hint_move=None, board_fl
     # Hint status text
     if show_hint and hint_move:
         from utils import format_move_for_print
-        hint_text = f"Лучший ход: {format_move_for_print(hint_move)}"
+        hint_text = f"Best move: {format_move_for_print(hint_move)}"
         hint_surf = FONT_STATUS.render(hint_text, True, (130, 210, 255))
         screen.blit(hint_surf, (px + 4, y))
         y += hint_surf.get_height() + 4
     elif show_hint:
-        thinking = FONT_STATUS.render("Считаю…", True, (160, 160, 160))
+        thinking = FONT_STATUS.render("Thinking…", True, (160, 160, 160))
         screen.blit(thinking, (px + 4, y))
         y += thinking.get_height() + 4
 
@@ -525,15 +525,15 @@ def draw_side_panel(screen, gamestate, show_hint=False, hint_move=None, board_fl
     status_text = ""
     status_color = WHITE
     if gamestate.checkmate:
-        winner = "Чёрные" if gamestate.current_turn == 'w' else "Белые"
-        status_text = f"♚ Мат! {winner} победили!"
+        winner = "Black" if gamestate.current_turn == 'w' else "White"
+        status_text = f"Checkmate! {winner} wins!"
         status_color = (255, 80, 80)
     elif gamestate.stalemate:
-        status_text = "½ Пат — ничья"
+        status_text = "½ Stalemate — draw"
         status_color = (220, 200, 80)
     elif gamestate.needs_promotion_choice:
-        player = "Белые" if gamestate.current_turn == 'w' else "Чёрные"
-        status_text = f"↑ {player}: выберите фигуру"
+        player = "White" if gamestate.current_turn == 'w' else "Black"
+        status_text = f"↑ {player}: choose a piece"
         status_color = (80, 210, 255)
 
     if status_text:
