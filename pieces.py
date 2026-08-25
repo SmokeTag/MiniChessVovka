@@ -18,19 +18,19 @@ PIECES_ALL_CASES = ['P', 'N', 'B', 'R', 'K', 'p', 'n', 'b', 'r', 'k']
 PROMOTION_PIECES_WHITE_STR = ['R', 'N', 'B']
 PROMOTION_PIECES_BLACK_STR = ['r', 'n', 'b']
 
-# Соответствие фигур и юникод-символов (для отрисовки текстом, если нужно)
+# Mapping of pieces to Unicode symbols (for text rendering, if needed)
 PIECE_TO_SYMBOL = {
     'p': '♟', 'n': '♞', 'b': '♝', 'r': '♜', 'k': '♚',
     'P': '♙', 'N': '♘', 'B': '♗', 'R': '♖', 'K': '♔'
 }
 
-# Оценка фигур для ИИ (в сантипешках)
+# Piece values for the AI (in centipawns)
 PIECE_VALUES = {
     'P': 100, 'N': 300, 'B': 300, 'R': 500, 'Q': 900, 'K': 10000,
     'p': -100, 'n': -300, 'b': -300, 'r': -500, 'q': -900, 'k': -10000,
     EMPTY_SQUARE: 0
 }
-# Оценка для фигур в руке (может быть чуть меньше)
+# Values for pieces in hand (may be slightly lower)
 HAND_PIECE_VALUES = {
     k.upper(): abs(v) * 0.9 for k, v in PIECE_VALUES.items() if k != EMPTY_SQUARE and k != 'K' and k != 'k' # Kings are never in hand
 }
@@ -45,21 +45,21 @@ KING_MOVES = DIAGONAL_MOVES + STRAIGHT_MOVES
 
 # --- Primitive Drawing Functions (OBSOLETE - Removed) ---
 # def draw_pawn(surface, color, is_white):
-#     """Рисует пешку (простой дизайн)."""
+#     """Draws a pawn (simple design)."""
 #     ...
 #
 # def draw_knight(surface, color, is_white):
-#     """Рисует коня (более стилизованный)."""
+#     """Draws a knight (more stylised)."""
 #     ...
 #
 # def draw_bishop(surface, color, is_white):
-#     """Рисует слона (более округлый)."""
+#     """Draws a bishop (more rounded)."""
 #     ...
 #
 # def draw_rook(surface, color, is_white):
-#     """Рисует ладью (классический вид)."""
+#     """Draws a rook (classic look)."""
 #     ...
 #
 # def draw_king(surface, color, is_white):
-#     """Рисует короля (простой дизайн с крестом)."""
+#     """Draws a king (simple design with a cross)."""
 #     ...

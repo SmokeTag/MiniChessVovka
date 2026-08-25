@@ -1,16 +1,16 @@
 [Unit]
 Description=Mini Chess AI Training Timer (00:00 UTC daily start)
-# НЕ используем Requires - пусть timer живет независимо от service
+# Do NOT use Requires - let the timer live independently of the service
 
 [Timer]
-# Запускаем каждый день в 00:00 UTC
-# Скрипт сам ждёт 02:00 UTC чтобы начать обучение и завершится в 10:00 UTC
+# Fire every day at 00:00 UTC
+# The script itself waits until 02:00 UTC to start training and exits at 10:00 UTC
 OnCalendar=*-*-* 00:00:00
 
-# Если пропустили (сервер был выключен), не запускать при следующей загрузке
+# If a run was missed (server powered off), do not run it on next boot
 Persistent=false
 
-# Точность срабатывания
+# Trigger accuracy
 AccuracySec=1min
 
 [Install]

@@ -10,9 +10,9 @@ from utils import (get_piece_color, is_on_board, get_opposite_color,
 
 # --- Game State Class ---
 class GameState:
-    """Класс для представления состояния игры"""
+    """Represents the state of a game."""
     def __init__(self):
-        """Инициализация новой игры"""
+        """Initialize a new game."""
         self.board = [[EMPTY_SQUARE for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
         self.current_turn = 'w'
         self.hands = {'w': {}, 'b': {}}
@@ -29,20 +29,20 @@ class GameState:
         self.needs_promotion_choice = False
         self.promotion_square = None
         self.last_move_for_promotion = None
-        # По умолчанию: оба игрока - люди (AI можно включить через кнопки в GUI)
-        self.white_ai_enabled = False  # По умолчанию: игрок играет за белых
-        self.black_ai_enabled = False  # По умолчанию: игрок играет за черных (включи AI кнопкой!)
+        # By default both players are human (the AI can be enabled with the GUI buttons)
+        self.white_ai_enabled = False  # By default the human plays White
+        self.black_ai_enabled = False  # By default the human plays Black (enable the AI with the button!)
         self.ai_depth = 10  # Deep search — Rust engine handles depth 10 in ~4s
         self.show_hint = False # Note: show_hint itself is global in main.py
         self._all_legal_moves_cache = None
         self._is_check_cache = None
-        self._hash_cache = None # Добавляем кэш для хэша
+        self._hash_cache = None # Cache for the position hash
         self.ai_history = [] # Stack for AI undo
         self.promoted_pieces = set()  # coords (r,c) of promoted pieces (ex-pawns)
 
 
     def save_state(self):
-        """Сохраняет текущее состояние игры для возможности отмены хода"""
+        """Saves the current game state so a move can be undone."""
         state = {
             'board': copy.deepcopy(self.board),
             'hands': copy.deepcopy(self.hands),
@@ -60,7 +60,7 @@ class GameState:
         self.saved_states.append(state)
 
     def undo_move(self):
-        """Отменяет последний ход"""
+        """Undoes the last move."""
         if len(self.saved_states) <= 1:
             print("Cannot undo further.")
             return False
@@ -102,11 +102,11 @@ class GameState:
         return True
 
     def reset_board(self):
-        """Сбрасывает состояние игры к начальному, вызывая __init__."""
+        """Resets the game state to the initial one by calling __init__."""
         self.__init__()
 
     def copy(self):
-        """Создает и возвращает глубокую копию текущего объекта GameState."""
+        """Creates and returns a deep copy of this GameState object."""
         try:
             hands_copy = copy.deepcopy(self.hands)
             board_copy = copy.deepcopy(self.board)
@@ -117,16 +117,16 @@ class GameState:
             board_copy = [[EMPTY_SQUARE for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
             king_pos_copy = {'w': None, 'b': None}
 
-        # Теперь создаем новый объект
+        # Now create the new object
         new_state = GameState()
 
-        # Присваиваем скопированные значения
+        # Assign the copied values
         new_state.board = board_copy
         new_state.current_turn = self.current_turn
-        new_state.hands = hands_copy # Используем УЖЕ скопированное значение
+        new_state.hands = hands_copy # Use the ALREADY copied value
         new_state.king_pos = king_pos_copy
 
-        # Копируем остальные атрибуты (как раньше)
+        # Copy the remaining attributes (as before)
         new_state.checkmate = self.checkmate
         new_state.stalemate = self.stalemate
         new_state.last_move = self.last_move
@@ -146,22 +146,22 @@ class GameState:
         return new_state
 
     def fast_copy_for_simulation(self):
-        """Быстрая копия только для AI симуляции - не копирует историю и UI состояние"""
+        """Fast copy for AI simulation only - skips history and UI state."""
         new_state = GameState()
         
-        # Быстрое копирование board (списков)
+        # Fast copy of board (lists)
         new_state.board = [row[:] for row in self.board]
         
-        # Быстрое копирование hands (словарей)
+        # Fast copy of hands (dicts)
         new_state.hands = {
             'w': dict(self.hands.get('w', {})),
             'b': dict(self.hands.get('b', {}))
         }
         
-        # Копирование king_pos
+        # Copy king_pos
         new_state.king_pos = dict(self.king_pos)
         
-        # Простые атрибуты
+        # Simple attributes
         new_state.current_turn = self.current_turn
         new_state.checkmate = self.checkmate
         new_state.stalemate = self.stalemate
@@ -169,8 +169,8 @@ class GameState:
         new_state.promotion_square = self.promotion_square
         new_state.promoted_pieces = set(self.promoted_pieces)
         
-        # НЕ копируем: saved_states, move_log, UI элементы, кеши
-        # Это делает копирование в ~10-20 раз быстрее
+        # NOT copied: saved_states, move_log, UI elements, caches
+        # This makes copying ~10-20x faster
         
         return new_state
 
@@ -186,7 +186,7 @@ class GameState:
                     self.king_pos['b'] = (r, f)
 
     def setup_initial_board(self):
-        """Устанавливает начальную позицию на доске"""
+        """Sets up the starting position on the board."""
         self.board = [
             ['.', '.', 'b', 'n', 'r', 'k'], # Black pieces (rank 0)
             ['.', '.', '.', '.', '.', 'p'], # Black pawn
@@ -220,7 +220,7 @@ class GameState:
 
 
     def make_move(self, move, is_check_game_over=True):
-        """Выполняет ход, меняет текущего игрока и проверяет окончание игры."""
+        """Makes a move, switches the side to move and checks for game over."""
         self._all_legal_moves_cache = None # Invalidate cache
 
         if self.needs_promotion_choice:
@@ -372,7 +372,7 @@ class GameState:
 
 
     def complete_promotion(self, chosen_piece_char):
-        """Завершает ход с превращением после выбора игрока/ИИ."""
+        """Completes a promotion move after the player/AI has chosen a piece."""
         if not self.needs_promotion_choice or not self.promotion_square:
             print("Error: Not in promotion choice state.")
             return False
@@ -530,11 +530,11 @@ class GameState:
         # Moves from pieces on board
         for r in range(BOARD_SIZE):
             for f in range(BOARD_SIZE):
-                piece = self.board[r][f] # Используем self.board
-                piece_color = get_piece_color(piece) # Может вернуть None для EMPTY_SQUARE
+                piece = self.board[r][f] # Use self.board
+                piece_color = get_piece_color(piece) # May return None for EMPTY_SQUARE
 
 
-                # if r == 5 and f == 4: # Пример для вывода конкретной клетки (где стоит wK в одном из логов)
+                # if r == 5 and f == 4: # Example for dumping a specific square (where wK stands in one of the logs)
                 #    print(f"  Checking ({r},{f}): Piece='{piece}' ({type(piece)}), PieceColor='{piece_color}', ExpectedColor='{color}', EMPTY_SQUARE='{EMPTY_SQUARE}' ({type(EMPTY_SQUARE)})")
                 if piece != EMPTY_SQUARE and piece_color == color:
                     # print(f"  Found own piece '{piece}' at ({r},{f})")
@@ -549,7 +549,7 @@ class GameState:
                     elif piece_type == KING[0]: move_func = self.get_king_moves
 
                     if move_func:
-                        # Передаем r, f, color - методы будут использовать self.board
+                        # Pass r, f, color - the methods will use self.board
                         # print(f"    Calling {move_func.__name__} for ({r},{f})")
 
                         piece_moves = move_func(r, f, color)
@@ -558,7 +558,7 @@ class GameState:
                         moves.extend(piece_moves)
 
         # Drop moves from hand
-        player_hand = self.hands.get(color, {}) # Используем self.hands
+        player_hand = self.hands.get(color, {}) # Use self.hands
         if player_hand:
             for piece_type_upper, count in player_hand.items():
                 if count > 0:
@@ -606,15 +606,15 @@ class GameState:
         return legal_moves
 
     def is_in_check(self, color):
-        """Проверяет, находится ли король цвета color под шахом."""
+        """Checks whether the king of the given color is in check."""
         king_pos = self.king_pos.get(color)
         if not king_pos:
              self.find_kings()
              king_pos = self.king_pos.get(color)
              if not king_pos:
-                  print(f"Предупреждение (is_in_check): Король цвета {color} не найден на доске!")
+                  print(f"Warning (is_in_check): the {color} king was not found on the board!")
                   return False
-        # Вызываем ПЕРЕИМЕНОВАННЫЙ метод
+        # Call the RENAMED method
         return self._internal_is_square_attacked(king_pos[0], king_pos[1], get_opposite_color(color))
 
     def check_game_over(self):
@@ -646,10 +646,10 @@ class GameState:
 
     # --- Legality and Check Checking ---
 
-    # ВОССТАНАВЛИВАЕМ МЕТОД
+    # METHOD RESTORED
     def _internal_is_square_attacked(self, r, f, attacker_color):
-        """Проверяет, атаковано ли поле (r, f) фигурами цвета attacker_color.
-           Использует self.board.
+        """Checks whether square (r, f) is attacked by pieces of attacker_color.
+           Uses self.board.
         """
         opponent_color = get_opposite_color(attacker_color)
 

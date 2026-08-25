@@ -21,36 +21,36 @@ from thread_utils import AIThread, HintThread
 
 # --- Main Loop ---
 def main():
-    """Основная функция игры"""
+    """Main game function"""
 
-    # <<< 1. Загружаем КЭШ ХОДОВ из БД при старте >>>
+    # <<< 1. Load the MOVE CACHE from the DB at startup >>>
     ai.load_move_cache_from_db()
 
-    print("Запуск main()")
+    print("Starting main()")
 
-    # Инициализация экрана
+    # Screen initialization
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("Mini Crazyhouse 6×6")
-    print("Окно создано")
+    print("Window created")
 
-    # Загрузка изображений
+    # Load images
     try:
         if not load_images():
-            print("КРИТИЧЕСКАЯ ОШИБКА: Не удалось загрузить изображения фигур!")
+            print("CRITICAL ERROR: Failed to load piece images!")
             pygame.quit()
             sys.exit(1)
-        print("Изображения загружены")
+        print("Images loaded")
     except Exception as e:
-        print(f"КРИТИЧЕСКАЯ ОШИБКА при загрузке изображений: {e}")
+        print(f"CRITICAL ERROR while loading images: {e}")
         import traceback
         traceback.print_exc()
         pygame.quit()
         sys.exit(1)
 
-    # Инициализация игры
+    # Game initialization
     gamestate = GameState()
     gamestate.setup_initial_board()
-    print("Игра инициализирована")
+    print("Game initialized")
 
     clock = pygame.time.Clock()
 
@@ -69,7 +69,7 @@ def main():
     board_flipped = False
 
     running = True
-    print("Начинаем игровой цикл")
+    print("Starting the game loop")
 
     # Check if AI should make the first move
     if gamestate.current_turn == 'b' and gamestate.black_ai_enabled:

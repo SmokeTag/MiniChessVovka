@@ -35,7 +35,7 @@ def piece_to_upper(piece_type): return piece_type.upper()
 def get_opposite_color(color): return 'b' if color == 'w' else 'w'
 
 def format_move_for_print(move):
-    """Форматирует ход для вывода в консоль или лог."""
+    """Formats a move for printing to the console or log."""
     if move is None: return "None"
     if move[0] == 'drop':
         _, piece, (r, f) = move
@@ -43,11 +43,11 @@ def format_move_for_print(move):
     else:
         (r1, f1), (r2, f2), promotion = move
         s = f"{coords_to_algebraic(r1, f1)}{coords_to_algebraic(r2, f2)}"
-        if promotion: s += f"={promotion.upper()}" # Показываем превращение
+        if promotion: s += f"={promotion.upper()}" # Show the promotion
         return s
 
 def is_same_move(move1, move2):
-    """Проверяет, совпадают ли два хода (игнорируя дополнительные детали)"""
+    """Checks whether two moves are the same (ignoring extra details)"""
     if not move1 or not move2: return False
     if move1[0] == 'drop' and move2[0] == 'drop':
         return move1[1] == move2[1] and move1[2] == move2[2]

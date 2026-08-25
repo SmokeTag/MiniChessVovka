@@ -1,5 +1,5 @@
 #!/bin/bash
-# Информационная панель обучения (live dashboard)
+# Training info panel (live dashboard)
 
 PROJHEALTH_FILE="/srv/MiniChessVovka/training.health"
 PID_FILE="/srv/MiniChessVovka/training.pid"
@@ -70,33 +70,33 @@ while true; do
     fi
     
     # Determine overall health status
-    # Логика статуса:
-    # 02:00 - 10:00 UTC: Должен работать (PID есть + Health свежий) -> OK, иначе ERROR
-    # 10:00 - 02:00 UTC: Должен отдыхать (PID нет) -> OK, иначе WARNING (или ERROR если работает)
+    # Status logic:
+    # 02:00 - 10:00 UTC: should be running (PID present + health fresh) -> OK, otherwise ERROR
+    # 10:00 - 02:00 UTC: should be idle (no PID) -> OK, otherwise WARNING (or ERROR if running)
     
     status_color=""
     status_text=""
     
     if is_training_time; then
-        # НОЧЬ (Рабочее время)
+        # NIGHT (working hours)
         if [ -n "$pid" ] && [ "$health_status" == "ok" ]; then
              status_color=$GREEN
-             status_text="АКТИВЕН (ОБУЧЕНИЕ)"
+             status_text="ACTIVE (TRAINING)"
         elif [ -n "$pid" ]; then
              status_color=$YELLOW
-             status_text="ЗАВИС?"
+             status_text="STALLED?"
         else
              status_color=$RED
-             status_text="ОСТАНОВЛЕН (ОШИБКА)"
+             status_text="STOPPED (ERROR)"
         fi
     else
-        # ДЕНЬ (Время отдыха)
+        # DAY (rest period)
         if [ -z "$pid" ]; then
              status_color=$GREEN
-             status_text="ОЖИДАНИЕ (ОТДЫХ)"
+             status_text="WAITING (IDLE)"
         else
              status_color=$YELLOW
-             status_text="РАБОТАЕТ ВНЕ ГРАФИКА"
+             status_text="RUNNING OFF-SCHEDULE"
         fi
     fi
     
@@ -123,7 +123,7 @@ while true; do
     fi
     echo ""
     
-    # Статус процесса
+    # Process status
     echo "📊 PROCESS STATUS:"
     if [ -f "$PID_FILE" ]; then
         pid=$(cat "$PID_FILE")
@@ -149,7 +149,7 @@ while true; do
     echo ""
     echo "📈 PROGRESS:"
     
-    # Прогресс
+    # Progress
     if [ -f "$PROGRESS_FILE" ]; then
         cat "$PROGRESS_FILE" | head -20
     else

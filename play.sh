@@ -1,32 +1,32 @@
 #!/bin/bash
-# Скрипт запуска Mini Chess с сильным AI
+# Launch script for Mini Chess with the strong AI
 
 echo "=========================================="
 echo "Mini Chess 6x6 Crazyhouse - Strong AI"
 echo "=========================================="
 echo ""
-echo "AI настройки:"
-echo "- Глубина поиска: 6 полуходов (быстрая игра)"
-echo "- Параллельный поиск: 7 воркеров"
+echo "AI settings:"
+echo "- Search depth: 6 plies (fast game)"
+echo "- Search: single-threaded (parallel path disabled)"
 echo "- Quiescence depth: 4"
-echo "- Move Cache: Включен (сохраняется в БД)"
+echo "- Move cache: enabled (persisted to the DB)"
 echo ""
-echo "Запуск игры..."
+echo "Starting the game..."
 echo ""
 
-# Переходим в директорию скрипта
+# Change to the script's directory
 cd "$(dirname "$0")"
 
-# Проверяем наличие venv
+# Check that venv exists
 if [ ! -d "venv" ]; then
-    echo "ОШИБКА: venv не найден!"
-    echo "Создайте его командой: python3 -m venv venv"
-    echo "Затем установите зависимости: ./venv/bin/pip install -r requirements.txt"
+    echo "ERROR: venv not found!"
+    echo "Create it with: python3 -m venv venv"
+    echo "Then install the dependencies: ./venv/bin/pip install -r requirements.txt"
     exit 1
 fi
 
-# Запускаем игру
+# Start the game
 ./venv/bin/python main.py
 
 echo ""
-echo "Игра завершена."
+echo "Game over."

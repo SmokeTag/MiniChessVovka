@@ -1,5 +1,5 @@
 #!/bin/bash
-# Скрипт проверки здоровья обучения
+# Training health-check script
 
 PROJECT_DIR="/srv/MiniChessVovka"
 SCRIPT_PATH="$PROJECT_DIR/src/scheduled_self_play.py"
@@ -33,16 +33,16 @@ get_next_availability() {
     [ -z "$current_hour" ] && current_hour=0
     
     if [ "$current_hour" -lt 2 ]; then
-        echo "Ожидание начала обучения в $((2 - current_hour)) часов (в 02:00 UTC)"
+        echo "Training starts in $((2 - current_hour)) hours (at 02:00 UTC)"
     elif [ "$current_hour" -ge 10 ]; then
-        echo "Следующий запуск через $((24 - current_hour)) часов (в 00:00 UTC завтра)"
+        echo "Next run in $((24 - current_hour)) hours (at 00:00 UTC tomorrow)"
     else
-        echo "Обучение активно до 10:00 UTC (осталось $((10 - current_hour)) часов)"
+        echo "Training active until 10:00 UTC ($((10 - current_hour)) hours left)"
     fi
 }
 
 echo "================================"
-echo "Проверка здоровья обучения Mini Chess"
+echo "Mini Chess training health check"
 echo "================================"
 echo ""
 
@@ -92,14 +92,14 @@ if [ "$in_training_time" = true ]; then
     if [ "$process_running" = true ] && [ "$process_active" = true ]; then
         status_color="$GREEN"
         status_icon="✓"
-        status_text="HEALTHY - Обучение активно (02:00-10:00 UTC)"
+        status_text="HEALTHY - training active (02:00-10:00 UTC)"
     else
         status_color="$RED"
         status_icon="✗"
         if [ "$process_running" = false ]; then
-            status_text="PROBLEM - Процесс должен работать в это время"
+            status_text="PROBLEM - the process should be running at this hour"
         else
-            status_text="PROBLEM - Процесс неактивен ${activity_seconds}с (порог: 10 мин)"
+            status_text="PROBLEM - process inactive for ${activity_seconds}s (threshold: 10 min)"
         fi
     fi
 elif [ "$in_waiting_time" = true ]; then
@@ -107,22 +107,22 @@ elif [ "$in_waiting_time" = true ]; then
     if [ "$process_running" = true ]; then
         status_color="$BLUE"
         status_icon="⏳"
-        status_text="WAITING - Процесс ожидает начала обучения (02:00 UTC)"
+        status_text="WAITING - process is waiting for training to start (02:00 UTC)"
     else
         status_color="$RED"
         status_icon="✗"
-        status_text="PROBLEM - Процесс должен быть запущен (ожидание 02:00 UTC)"
+        status_text="PROBLEM - the process should be running (waiting for 02:00 UTC)"
     fi
 else
     # OUTSIDE working hours (10:00-24:00 UTC)
     if [ "$process_running" = false ]; then
         status_color="$GREEN"
         status_icon="✓"
-        status_text="HEALTHY - Процесс корректно остановлен (вне рабочих часов)"
+        status_text="HEALTHY - process correctly stopped (outside working hours)"
     else
         status_color="$YELLOW"
         status_icon="!"
-        status_text="NOTE - Процесс всё ещё работает (завершится вскоре)"
+        status_text="NOTE - process is still running (will exit shortly)"
     fi
 fi
 
@@ -138,15 +138,15 @@ echo ""
 current_time_utc=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
 echo "TIME WINDOW:"
 echo "  Current Time: $current_time_utc"
-echo "  Timer Start:  00:00 UTC (запуск systemd таймера)"
-echo "  Training:     02:00-10:00 UTC (8-часовое окно обучения)"
+echo "  Timer Start:  00:00 UTC (systemd timer fires)"
+echo "  Training:     02:00-10:00 UTC (8-hour training window)"
 echo ""
 if [ "$in_training_time" = true ]; then
-    echo -e "  ${GREEN}Окно обучения активно${NC}"
+    echo -e "  ${GREEN}Training window is active${NC}"
 elif [ "$in_waiting_time" = true ]; then
-    echo -e "  ${BLUE}Период ожидания (процесс ждёт 02:00 UTC)${NC}"
+    echo -e "  ${BLUE}Waiting period (process is waiting for 02:00 UTC)${NC}"
 else
-    echo -e "  ${YELLOW}Вне рабочих часов (таймер запустится в 00:00 UTC)${NC}"
+    echo -e "  ${YELLOW}Outside working hours (timer fires at 00:00 UTC)${NC}"
 fi
 echo -e "  $(get_next_availability)"
 echo ""
@@ -156,92 +156,92 @@ echo ""
 # Detailed process information
 echo "📊 PROCESS DETAILS:"
 if [ ! -f "$PID_FILE" ]; then
-    echo -e "  ${YELLOW}⚠ PID файл не найден${NC}"
-    echo "  Обучение, вероятно, не запущено"
+    echo -e "  ${YELLOW}⚠ PID file not found${NC}"
+    echo "  Training is probably not running"
     echo ""
     
-    # Проверяем, запущены ли процессы напрямую
+    # Check whether the processes are running directly
     if pgrep -f "scheduled_self_play.py" > /dev/null 2>&1; then
-        echo -e "  ${YELLOW}! Но найдены процессы scheduled_self_play.py:${NC}"
+        echo -e "  ${YELLOW}! But scheduled_self_play.py processes were found:${NC}"
         pgrep -f "scheduled_self_play.py" | while read p; do
             ps -p $p -o pid,ppid,cmd,%cpu,%mem,etime=
         done
     fi
 else
     pid=$(cat "$PID_FILE")
-    echo "  PID из файла: $pid"
+    echo "  PID from file: $pid"
     
-    # Проверяем, работает ли процесс
+    # Check whether the process is running
     if ps -p $pid > /dev/null 2>&1; then
-        echo -e "  ${GREEN}✓ Процесс работает${NC}"
+        echo -e "  ${GREEN}✓ Process is running${NC}"
         echo ""
         ps -p $pid -o pid,ppid,cmd,%cpu,%mem,etime
         
-        # Проверяем использование ресурсов
+        # Check resource usage
         echo ""
         cpu=$(ps -p $pid -o %cpu= | tr -d ' ')
         mem=$(ps -p $pid -o %mem= | tr -d ' ')
         
-        echo -e "  Использование ресурсов:"
+        echo -e "  Resource usage:"
         echo -e "    CPU: ${GREEN}$cpu%${NC}"
         echo -e "    MEM: ${GREEN}$mem%${NC}"
         
-        # Проверяем health file
+        # Check the health file
         if [ -f "$HEALTH_FILE" ]; then
             echo ""
-            echo "  Последнее обновление здоровья: $activity_seconds сек назад"
+            echo "  Last health update: $activity_seconds sec ago"
             
             if [ $activity_seconds -gt 600 ]; then
-                echo -e "  ${RED}✗ ВНИМАНИЕ: Нет обновлений более 10 минут!${NC}"
+                echo -e "  ${RED}✗ WARNING: no updates for more than 10 minutes!${NC}"
             elif [ $activity_seconds -gt 300 ]; then
-                echo -e "  ${YELLOW}! Нет обновлений более 5 минут${NC}"
+                echo -e "  ${YELLOW}! No updates for more than 5 minutes${NC}"
             else
-                echo -e "  ${GREEN}✓ Процесс отзывчив${NC}"
+                echo -e "  ${GREEN}✓ Process is responsive${NC}"
             fi
         else
             echo ""
-            echo -e "  ${YELLOW}⚠ Health файл не найден${NC}"
+            echo -e "  ${YELLOW}⚠ Health file not found${NC}"
         fi
     else
-        echo -e "  ${RED}✗ Процесс с PID $pid не работает${NC}"
+        echo -e "  ${RED}✗ Process with PID $pid is not running${NC}"
         
-        # Проверяем, есть ли другие процессы
+        # Check whether there are other processes
         if pgrep -f "scheduled_self_play.py" > /dev/null 2>&1; then
-            echo -e "  ${YELLOW}! Но найдены другие процессы:${NC}"
+            echo -e "  ${YELLOW}! But other processes were found:${NC}"
             pgrep -f "scheduled_self_play.py" | while read p; do
                 ps -p $p -o pid,ppid,cmd,%cpu,%mem,etime=
             done
         else
-            echo -e "  ${RED}✗ Никаких процессов обучения не найдено${NC}"
+            echo -e "  ${RED}✗ No training processes found at all${NC}"
         fi
     fi
 fi
 
 echo ""
 echo "================================"
-echo "Последние записи в логе:"
+echo "Most recent log entries:"
 echo "================================"
 
 if [ -f "$LOG_FILE" ]; then
     tail -n 20 "$LOG_FILE"
 else
-    echo "Лог файл не найден: $LOG_FILE"
+    echo "Log file not found: $LOG_FILE"
 fi
 
 echo ""
 echo "================================"
-echo "Рекомендации:"
+echo "Recommendations:"
 echo "================================"
 echo ""
-echo "Если обучение не запущено:"
+echo "If training is not running:"
 echo "  1. sudo systemctl start minichesstrain.service"
 echo ""
-echo "Если процесс зависший:"
+echo "If the process is stalled:"
 echo "  1. sudo systemctl restart minichesstrain.service"
 echo ""
-echo "Для просмотра полных логов:"
+echo "To view the full logs:"
 echo "  tail -f $LOG_FILE"
 echo ""
-echo "Для просмотра systemd логов:"
+echo "To view the systemd logs:"
 echo "  sudo journalctl -u minichesstrain.service -f"
 echo ""

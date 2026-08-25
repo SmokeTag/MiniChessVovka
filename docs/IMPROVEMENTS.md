@@ -1,50 +1,50 @@
-# Будущие Улучшения для Mini Chess 6x6 Crazyhouse
+# Future Improvements for Mini Chess 6x6 Crazyhouse
 
-Этот документ содержит список рекомендованных улучшений, которые можно реализовать для повышения силы AI, скорости работы и качества кода.
+This document lists recommended improvements that could be implemented to increase AI strength, execution speed, and code quality.
 
 ---
 
-## 🚀 Срочные улучшения (быстрая реализация + большой эффект)
+## 🚀 Urgent improvements (quick to implement + large effect)
 
-### 1. Opening Book (Библиотека дебютов)
-**Проблема:** AI тратит 10-60 секунд на расчёт первых 5-8 ходов, хотя дебютные позиции хорошо изучены.
+### 1. Opening Book
+**Problem:** the AI spends 10-60 seconds calculating the first 5-8 moves, even though opening positions are well studied.
 
-**Решение:**
-- Создать базу данных из 50-100 лучших дебютных позиций
-- Сохранить первые 5-8 ходов для популярных дебютов
-- Формат: SQLite таблица `openings(position_hash, move, frequency)`
+**Solution:**
+- Build a database of 50-100 of the best opening positions
+- Store the first 5-8 moves for popular openings
+- Format: SQLite table `openings(position_hash, move, frequency)`
 
-**Реализация:**
+**Implementation:**
 ```python
 def load_opening_book():
-    """Загружает дебютную книгу из opening_book.db"""
+    """Loads the opening book from opening_book.db"""
     conn = sqlite3.connect('opening_book.db')
-    # ... загрузка
+    # ... loading
     
 def get_opening_move(position_hash):
-    """Возвращает дебютный ход если позиция в книге"""
+    """Returns an opening move if the position is in the book"""
     return opening_book.get(position_hash)
 ```
 
-**Эффект:**
-- ⚡ Мгновенные первые 5-8 ходов (0.01с вместо 10-60с)
-- 📈 Более качественная игра в дебюте
+**Effect:**
+- ⚡ Instant first 5-8 moves (0.01s instead of 10-60s)
+- 📈 Better quality of play in the opening
 
-**Оценка времени:** 2-4 часа
+**Time estimate:** 2-4 hours
 
 ---
 
 ### 2. Aspiration Windows
-**Проблема:** Iterative deepening работает без aspiration windows, что замедляет поиск.
+**Problem:** iterative deepening runs without aspiration windows, which slows the search down.
 
-**Решение:**
-- Добавить "окна ожидания" на основе предыдущих итераций
-- Использовать узкий диапазон [alpha, beta] вокруг предыдущего результата
-- При выходе за границы - расширять окно
+**Solution:**
+- Add aspiration windows based on the previous iteration
+- Use a narrow [alpha, beta] range around the previous result
+- On a fail high/low, widen the window
 
-**Реализация:**
+**Implementation:**
 ```python
-# В функции find_best_move, внутри iterative deepening
+# In find_best_move, inside iterative deepening
 aspiration_window = 50
 for d in range(1, depth + 1):
     if d >= 4 and best_score is not None:
@@ -55,176 +55,176 @@ for d in range(1, depth + 1):
     
     score, move = minimax_alpha_beta(gamestate, d, alpha, beta, is_maximizing)
     
-    # Если вышли за границы - повторить с полными границами
+    # If we fell outside the window - repeat with full bounds
     if score <= alpha or score >= beta:
         score, move = minimax_alpha_beta(gamestate, d, -float('inf'), float('inf'), is_maximizing)
 ```
 
-**Эффект:**
-- ⚡ +20-30% скорости в мидгейме
-- 📉 Меньше узлов для исследования
+**Effect:**
+- ⚡ +20-30% speed in the middlegame
+- 📉 Fewer nodes to explore
 
-**Оценка времени:** 1-2 часа
+**Time estimate:** 1-2 hours
 
 ---
 
 ### 3. Null-Move Pruning
-**Проблема:** AI исследует все ходы даже когда позиция явно выигрышная.
+**Problem:** the AI explores every move even when the position is clearly winning.
 
-**Решение:**
-- Пропустить ход (null move)
-- Если даже после этого позиция выигрышная - можно отсечь ветку
-- Уменьшить глубину поиска на 2-3 при null-move
+**Solution:**
+- Skip a move (null move)
+- If the position is still winning afterwards, the branch can be cut
+- Reduce search depth by 2-3 for the null-move search
 
-**Реализация:**
+**Implementation:**
 ```python
 def minimax_alpha_beta(gamestate, depth, alpha, beta, maximizing_player):
     # ... existing code ...
     
-    # Null-move pruning (для не-концевых узлов и не-PV узлов)
+    # Null-move pruning (for non-terminal and non-PV nodes)
     if depth >= 3 and not gamestate.is_in_check(gamestate.current_turn):
-        # Симулируем пропуск хода
+        # Simulate skipping a move
         gamestate.current_turn = get_opposite_color(gamestate.current_turn)
         null_score = -minimax_alpha_beta(gamestate, depth - 3, -beta, -beta + 1, not maximizing_player)
         gamestate.current_turn = get_opposite_color(gamestate.current_turn)
         
         if null_score >= beta:
-            return beta  # Отсечение
+            return beta  # Cutoff
     
     # ... rest of minimax ...
 ```
 
-**Эффект:**
-- ⚡ +30-50% скорости поиска
-- 🎯 Особенно эффективно в эндшпиле
+**Effect:**
+- ⚡ +30-50% search speed
+- 🎯 Especially effective in the endgame
 
-**Оценка времени:** 2-3 часа
+**Time estimate:** 2-3 hours
 
 ---
 
-### 4. Чистка кода и оптимизация
-**Проблема:** ~~Множество DEBUG принтов замедляют работу~~ ✅ **ИСПРАВЛЕНО**
+### 4. Code cleanup and optimization
+**Problem:** ~~Many DEBUG prints slow things down~~ ✅ **FIXED**
 
-**Дополнительно:**
-- Добавить type hints для всех функций
-- Написать docstrings в едином стиле
-- Профилировать код для поиска узких мест
+**Additionally:**
+- Add type hints to all functions
+- Write docstrings in a consistent style
+- Profile the code to find bottlenecks
 
-**Реализация:**
+**Implementation:**
 ```python
-# Профилирование
+# Profiling
 import cProfile
 cProfile.run('ai.find_best_move(gamestate, depth=16)', 'ai_profile.stats')
 
-# Анализ
+# Analysis
 import pstats
 p = pstats.Stats('ai_profile.stats')
 p.sort_stats('cumulative').print_stats(20)
 ```
 
-**Эффект:**
-- ~~⚡ +5-10% скорости~~ ✅ Достигнуто
-- 🧹 Читаемый код
-- 📊 Понимание узких мест
+**Effect:**
+- ~~⚡ +5-10% speed~~ ✅ Achieved
+- 🧹 Readable code
+- 📊 Understanding of the bottlenecks
 
-**Оценка времени:** 2-4 часа
+**Time estimate:** 2-4 hours
 
 ---
 
-## 🎯 Средние улучшения (несколько дней работы)
+## 🎯 Medium improvements (several days of work)
 
 ### 5. Late Move Reduction (LMR)
-**Проблема:** Все ходы исследуются на полную глубину, даже явно плохие.
+**Problem:** all moves are searched to full depth, even clearly bad ones.
 
-**Решение:**
-- После исследования нескольких лучших ходов на полную глубину
-- Остальные ходы исследовать на уменьшенную глубину (depth - 2)
-- Если найден хороший ход - повторить поиск на полную глубину
+**Solution:**
+- After searching the first few best moves to full depth
+- Search the remaining moves at reduced depth (depth - 2)
+- If a good move is found, re-search it at full depth
 
-**Эффект:**
-- ⚡ +20-30% скорости
-- 🎯 Можно увеличить depth на 1-2
+**Effect:**
+- ⚡ +20-30% speed
+- 🎯 Depth can be increased by 1-2
 
-**Оценка времени:** 4-6 часов
+**Time estimate:** 4-6 hours
 
 ---
 
 ### 6. Principal Variation Search (PVS)
-**Решение:**
-- Первый ход исследуется с полным окном [alpha, beta]
-- Остальные - с нулевым окном [alpha, alpha+1] (scout search)
-- При опровержении - повторный поиск с полным окном
+**Solution:**
+- The first move is searched with the full window [alpha, beta]
+- The rest with a null window [alpha, alpha+1] (scout search)
+- On a refutation, re-search with the full window
 
-**Эффект:**
-- ⚡ +15-25% скорости
-- 🎯 Более точная оценка лучших ходов
+**Effect:**
+- ⚡ +15-25% speed
+- 🎯 More accurate evaluation of the best moves
 
-**Оценка времени:** 6-8 часов
+**Time estimate:** 6-8 hours
 
 ---
 
-### 7. Улучшенная оценочная функция
-**Текущая:** Базовая оценка (материал + позиция + центр + король)
+### 7. Improved evaluation function
+**Current:** basic evaluation (material + position + center + king)
 
-**Добавить:**
-- Mobility (подвижность фигур)
-- King safety (продвинутая оценка безопасности короля)
-- Piece coordination (взаимодействие фигур)
-- Pawn shield (пешечный щит короля)
-- Outposts (форпосты для коней)
+**To add:**
+- Mobility (piece mobility)
+- King safety (advanced king-safety evaluation)
+- Piece coordination
+- Pawn shield (pawn cover in front of the king)
+- Outposts (for knights)
 
-**Эффект:**
+**Effect:**
 - 📈 +100-200 ELO
-- 🎯 Более точная позиционная игра
+- 🎯 More accurate positional play
 
-**Оценка времени:** 8-12 часов
+**Time estimate:** 8-12 hours
 
 ---
 
-## 🔥 Долгосрочные улучшения (недели работы)
+## 🔥 Long-term improvements (weeks of work)
 
-### 8. Bitboards (Битовые доски)
-**Проблема:** 2D массив `board[r][c]` медленный для операций.
+### 8. Bitboards
+**Problem:** the 2D array `board[r][c]` is slow for these operations.
 
-**Решение:**
-- Представить доску как набор 64-битных чисел (bitboards)
-- Каждая фигура - отдельный bitboard
-- Использовать битовые операции (&, |, ^, ~, <<, >>)
+**Solution:**
+- Represent the board as a set of 64-bit integers (bitboards)
+- One bitboard per piece type
+- Use bitwise operations (&, |, ^, ~, <<, >>)
 
-**Пример:**
+**Example:**
 ```python
 class Bitboard:
     def __init__(self):
-        self.white_pawns = 0b0000000000000000  # 6x6 = 36 бит
+        self.white_pawns = 0b0000000000000000  # 6x6 = 36 bits
         self.black_pawns = 0b0000000000000000
-        # ... для каждой фигуры
+        # ... one per piece
     
     def get_piece_attacks(self, square):
-        """Возвращает атакуемые клетки за O(1)"""
+        """Returns the attacked squares in O(1)"""
         return ATTACK_TABLES[piece_type][square]
 ```
 
-**Эффект:**
-- ⚡ **x10-20 ускорение** операций
-- 🎯 Depth 20-24 становится реальным
-- 📈 +300-500 ELO от глубины
+**Effect:**
+- ⚡ **10-20x speedup** of operations
+- 🎯 Depth 20-24 becomes realistic
+- 📈 +300-500 ELO from the extra depth
 
-**Оценка времени:** 40-80 часов (полная переработка)
+**Time estimate:** 40-80 hours (full rewrite)
 
 ---
 
 ### 9. Neural Network Evaluation
-**Текущее:** Рукописная оценочная функция
+**Current:** hand-written evaluation function
 
-**Решение:**
-- Обучить нейросеть на self-play партиях
-- Архитектура: CNN или Transformer
-- Вход: board state (6x6x12 каналов для каждой фигуры)
-- Выход: value (-1 до +1) + policy (вероятности ходов)
+**Solution:**
+- Train a neural network on self-play games
+- Architecture: CNN or Transformer
+- Input: board state (6x6x12 channels, one per piece)
+- Output: value (-1 to +1) + policy (move probabilities)
 
-**Реализация:**
+**Implementation:**
 ```python
-# Уже есть заготовка в nn/model.py!
+# There is already a stub in nn/model.py!
 import torch
 from nn.model import ChessNet
 
@@ -238,115 +238,115 @@ def nn_evaluate(board_state):
     return value.item()
 ```
 
-**Обучение:**
-1. Self-play (AI играет сам с собой)
-2. Сохранение партий
-3. Обучение на результатах
-4. Итеративное улучшение (AlphaZero style)
+**Training:**
+1. Self-play (the AI plays against itself)
+2. Save the games
+3. Train on the results
+4. Iterative improvement (AlphaZero style)
 
-**Эффект:**
+**Effect:**
 - 📈 +300-500 ELO
-- 🎯 Более точная оценка сложных позиций
-- 🧠 Понимание тонких нюансов
+- 🎯 More accurate evaluation of complex positions
+- 🧠 Understanding of subtle nuances
 
-**Оценка времени:** 60-120 часов + GPU для обучения
+**Time estimate:** 60-120 hours + a GPU for training
 
 ---
 
 ### 10. Monte Carlo Tree Search (MCTS) + NN
-**Решение:**
-- Комбинация MCTS с нейросетевой оценкой (как AlphaZero)
-- Уже есть заготовка в `nn/mcts.py`!
+**Solution:**
+- Combine MCTS with neural-network evaluation (as in AlphaZero)
+- There is already a stub in `nn/mcts.py`!
 
-**Алгоритм:**
-1. Selection: выбор узла по UCB
-2. Expansion: расширение узла
-3. Evaluation: оценка через NN
-4. Backpropagation: обновление статистики
+**Algorithm:**
+1. Selection: pick a node by UCB
+2. Expansion: expand the node
+3. Evaluation: evaluate via the NN
+4. Backpropagation: update the statistics
 
-**Эффект:**
+**Effect:**
 - 📈 +500-800 ELO
-- 🎯 ~2800-3000 ELO (топовый уровень)
-- 🧠 AlphaZero-подобная сила
+- 🎯 ~2800-3000 ELO (top level)
+- 🧠 AlphaZero-like strength
 
-**Оценка времени:** 80-150 часов + GPU
+**Time estimate:** 80-150 hours + a GPU
 
 ---
 
 ### 11. Endgame Tablebase
-**Решение:**
-- Предрасчитать все позиции с ≤4 фигурами
-- Сохранить в базу данных (SQLite или rocksDB)
-- Использовать для идеальной игры в эндшпиле
+**Solution:**
+- Precompute all positions with ≤4 pieces
+- Store them in a database (SQLite or RocksDB)
+- Use it for perfect endgame play
 
-**Формат:**
+**Format:**
 ```
 position_hash -> {result: 'WIN/LOSS/DRAW', moves_to_mate: 12}
 ```
 
-**Эффект:**
-- ♟️ Идеальная игра в эндшпиле
-- 📈 +50-100 ELO в эндшпиле
-- ⏱️ Мгновенные ходы в простых позициях
+**Effect:**
+- ♟️ Perfect endgame play
+- 📈 +50-100 ELO in the endgame
+- ⏱️ Instant moves in simple positions
 
-**Оценка времени:** 30-50 часов + вычислительная мощность
+**Time estimate:** 30-50 hours + compute power
 
 ---
 
-## 📊 Приоритеты реализации
+## 📊 Implementation priorities
 
-### Фаза 1: Быстрые победы (1-2 недели)
-1. ✅ Чистка DEBUG кода (завершено)
+### Phase 1: quick wins (1-2 weeks)
+1. ✅ DEBUG code cleanup (done)
 2. Opening Book
 3. Aspiration Windows
 4. Null-Move Pruning
 
-**Результат:** +40-60% скорости, depth 18-20, ~2200-2400 ELO
+**Result:** +40-60% speed, depth 18-20, ~2200-2400 ELO
 
 ---
 
-### Фаза 2: Алгоритмические улучшения (2-4 недели)
+### Phase 2: algorithmic improvements (2-4 weeks)
 5. Late Move Reduction
 6. Principal Variation Search
-7. Улучшенная оценочная функция
+7. Improved evaluation function
 
-**Результат:** еще +30% скорости, ~2400-2600 ELO
+**Result:** another +30% speed, ~2400-2600 ELO
 
 ---
 
-### Фаза 3: Масштабные изменения (2-4 месяца)
-8. Bitboards (полная переработка)
+### Phase 3: large-scale changes (2-4 months)
+8. Bitboards (full rewrite)
 9. Neural Network Evaluation
 10. MCTS + NN (AlphaZero approach)
 11. Endgame Tablebase
 
-**Результат:** ~2800-3200 ELO, профессиональный уровень
+**Result:** ~2800-3200 ELO, professional level
 
 ---
 
-## 🛠️ Инструменты и библиотеки
+## 🛠️ Tools and libraries
 
-### Для обучения нейросетей:
-- PyTorch (уже есть в requirements.txt)
-- TensorBoard для визуализации
-- CUDA для GPU ускорения
+### For training neural networks:
+- PyTorch (already in requirements.txt)
+- TensorBoard for visualization
+- CUDA for GPU acceleration
 
-### Для профилирования:
+### For profiling:
 ```bash
-# Профилирование Python
+# Profiling Python
 python -m cProfile -o profile.stats main.py
 
-# Анализ
+# Analysis
 python -c "import pstats; pstats.Stats('profile.stats').sort_stats('cumulative').print_stats(30)"
 
-# Визуализация
+# Visualization
 pip install snakeviz
 snakeviz profile.stats
 ```
 
-### Для тестирования силы:
+### For strength testing:
 ```python
-# AI vs AI турнир
+# AI vs AI tournament
 def tournament(ai_versions, games_per_pair=10):
     for ai1, ai2 in combinations(ai_versions, 2):
         results = play_matches(ai1, ai2, games_per_pair)
@@ -355,33 +355,33 @@ def tournament(ai_versions, games_per_pair=10):
 
 ---
 
-## 📚 Ресурсы для изучения
+## 📚 Resources for further reading
 
-### Шахматное программирование:
+### Chess programming:
 - Chess Programming Wiki: https://www.chessprogramming.org
 - Stockfish source code: https://github.com/official-stockfish/Stockfish
-- Sunfish (простой движок на Python): https://github.com/thomasahle/sunfish
+- Sunfish (a simple engine in Python): https://github.com/thomasahle/sunfish
 
-### AlphaZero / Нейросети:
+### AlphaZero / neural networks:
 - AlphaZero paper: https://arxiv.org/abs/1712.01815
 - Leela Chess Zero: https://lczero.org
 - PyTorch tutorial: https://pytorch.org/tutorials/
 
-### Оптимизация:
+### Optimization:
 - Python Performance Tips: https://wiki.python.org/moin/PythonSpeed
 - Numba (JIT compilation): http://numba.pydata.org
 
 ---
 
-## 📝 Заметки
+## 📝 Notes
 
-- **Текущая сила:** ~2000-2200 ELO (depth 16)
-- **Потенциал без нейросетей:** ~2600-2800 ELO (bitboards + оптимизации)
-- **Потенциал с нейросетями:** ~3000-3200 ELO (MCTS + NN)
+- **Current strength:** ~2000-2200 ELO (depth 16)
+- **Potential without neural networks:** ~2600-2800 ELO (bitboards + optimizations)
+- **Potential with neural networks:** ~3000-3200 ELO (MCTS + NN)
 
-**Приоритет:** Начните с Фазы 1 (Opening Book, Aspiration, Null-Move) - это даст максимальный эффект за минимальное время.
+**Priority:** start with Phase 1 (Opening Book, Aspiration, Null-Move) - it gives the largest effect for the least time.
 
 ---
 
-*Документ создан: 2024*  
-*Последнее обновление: после чистки DEBUG кода*
+*Document created: 2024*  
+*Last updated: after the DEBUG code cleanup*

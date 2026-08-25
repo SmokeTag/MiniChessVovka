@@ -1,25 +1,25 @@
 #!/bin/bash
-# Скрипт для запуска режима самообучения
+# Launch script for self-play training mode
 
 echo "=================================="
-echo "Запуск режима самообучения AI"
+echo "Starting AI self-play training mode"
 echo "=================================="
 echo ""
-echo "Параметры по умолчанию:"
-echo "  - Глубина: 6"
-echo "  - Исследование: 20%"
-echo "  - Количество игр: бесконечно"
+echo "Default parameters:"
+echo "  - Depth: 6"
+echo "  - Exploration: 20%"
+echo "  - Number of games: unlimited"
 echo ""
-echo "Для остановки нажмите Ctrl+C"
-echo "Прогресс будет сохранен в базу данных"
+echo "Press Ctrl+C to stop"
+echo "Progress will be saved to the database"
 echo ""
 echo "=================================="
 echo ""
 
-# Активируем виртуальное окружение если оно есть
+# Activate the virtualenv if there is one
 if [ -d "venv" ]; then
     source venv/bin/activate
 fi
 
-# Запускаем режим самообучения
+# Start self-play training mode
 python3 src/self_play.py

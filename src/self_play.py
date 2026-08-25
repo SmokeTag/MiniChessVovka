@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Режим самообучения для Mini Chess AI
-AI играет сам с собой и в 20% случаев выбирает второй лучший ход
-для исследования альтернативных веток игрового дерева.
+Self-play training mode for the Mini Chess AI.
+The AI plays against itself and 20% of the time picks the second-best move
+to explore alternative branches of the game tree.
 """
 
 import signal
@@ -16,83 +16,83 @@ import ai
 from utils import format_move_for_print
 
 
-# Глобальный флаг для graceful shutdown
+# Global flag for graceful shutdown
 shutdown_requested = False
 
 
 def signal_handler(signum, frame):
-    """Обработчик сигналов для graceful shutdown"""
+    """Signal handler for graceful shutdown."""
     global shutdown_requested
     print("\n\n" + "="*60)
-    print("Получен сигнал прерывания. Завершаем работу...")
+    print("Interrupt received. Shutting down...")
     print("="*60)
     shutdown_requested = True
 
 
 def setup_signal_handlers():
-    """Устанавливает обработчики сигналов"""
+    """Installs the signal handlers."""
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
 
 def choose_move_with_exploration(gamestate: GameState, depth: int, exploration_rate: float = 0.2):
     """
-    Выбирает ход с исследованием альтернатив.
+    Picks a move, exploring alternatives.
     
     Args:
-        gamestate: Текущее состояние игры
-        depth: Глубина поиска
-        exploration_rate: Вероятность выбора второго лучшего хода (по умолчанию 20%)
+        gamestate: Current game state
+        depth: Search depth
+        exploration_rate: Probability of picking the second-best move (default 20%)
     
     Returns:
-        Выбранный ход
+        The chosen move
     """
-    # Получаем топ-2 лучших хода
+    # Get the top 2 moves
     top_moves = ai.find_best_move(gamestate, depth=depth, return_top_n=2)
     
     if not top_moves:
-        print("Нет доступных ходов!")
+        print("No moves available!")
         return None
     
-    # Если есть только один ход, выбираем его
+    # If there is only one move, take it
     if len(top_moves) == 1:
         move, score = top_moves[0]
-        print(f"  Единственный ход: {format_move_for_print(move)}, оценка: {score:.1f}")
+        print(f"  Only move: {format_move_for_print(move)}, score: {score:.1f}")
         return move
     
-    # Проверяем, нужно ли исследовать
+    # Decide whether to explore
     explore = random.random() < exploration_rate
     
     best_move, best_score = top_moves[0]
     second_move, second_score = top_moves[1]
     
-    # Не исследуем, если лучший ход - мат
+    # Do not explore if the best move is mate
     is_mate = abs(best_score) >= ai.CHECKMATE_SCORE * 0.9
     
     if explore and not is_mate:
-        print(f"  ИССЛЕДОВАНИЕ: Выбираем 2-й лучший ход")
-        print(f"    1-й: {format_move_for_print(best_move)}, оценка: {best_score:.1f}")
-        print(f"    2-й: {format_move_for_print(second_move)}, оценка: {second_score:.1f} ← ВЫБРАН")
+        print(f"  EXPLORING: taking the 2nd-best move")
+        print(f"    1st: {format_move_for_print(best_move)}, score: {best_score:.1f}")
+        print(f"    2nd: {format_move_for_print(second_move)}, score: {second_score:.1f} <- CHOSEN")
         return second_move
     else:
-        reason = "мат найден" if is_mate else "стандартный выбор"
-        print(f"  Лучший ход ({reason}): {format_move_for_print(best_move)}, оценка: {best_score:.1f}")
+        reason = "mate found" if is_mate else "standard choice"
+        print(f"  Best move ({reason}): {format_move_for_print(best_move)}, score: {best_score:.1f}")
         if not is_mate:
-            print(f"    2-й: {format_move_for_print(second_move)}, оценка: {second_score:.1f}")
+            print(f"    2nd: {format_move_for_print(second_move)}, score: {second_score:.1f}")
         return best_move
 
 
 def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int = 200):
     """
-    Проводит одну игру AI против себя
+    Plays a single AI-vs-itself game.
     
     Args:
-        depth: Глубина поиска AI
-        exploration_rate: Вероятность выбора 2-го лучшего хода
-        max_moves: Максимальное количество ходов в партии
+        depth: AI search depth
+        exploration_rate: Probability of picking the 2nd-best move
+        max_moves: Maximum number of moves in a game
     
     Returns:
-        dict с результатами игры
+        dict with the game results
     """
     global shutdown_requested
     
@@ -104,19 +104,19 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
     move_times = []
     
     print("\n" + "="*60)
-    print(f"Начинаем новую партию (глубина: {depth}, исследование: {exploration_rate*100:.0f}%)")
+    print(f"Starting a new game (depth: {depth}, exploration: {exploration_rate*100:.0f}%)")
     print("="*60 + "\n")
     
     while not shutdown_requested:
         move_count += 1
-        current_player = "Белые" if gamestate.current_turn == 'w' else "Черные"
+        current_player = "White" if gamestate.current_turn == 'w' else "Black"
         
-        print(f"\n--- Ход {move_count} ({current_player}) ---")
+        print(f"\n--- Move {move_count} ({current_player}) ---")
         
-        # Проверяем терминальное состояние
+        # Check for a terminal state
         if gamestate.checkmate:
-            winner = "Черные" if gamestate.current_turn == 'w' else "Белые"
-            print(f"\nМАТ! {winner} победили!")
+            winner = "Black" if gamestate.current_turn == 'w' else "White"
+            print(f"\nCHECKMATE! {winner} wins!")
             return {
                 'result': 'checkmate',
                 'winner': winner,
@@ -126,7 +126,7 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
             }
         
         if gamestate.stalemate:
-            print("\nПАТ! Ничья.")
+            print("\nSTALEMATE! Draw.")
             return {
                 'result': 'stalemate',
                 'winner': None,
@@ -135,9 +135,9 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
                 'avg_move_time': sum(move_times) / len(move_times) if move_times else 0
             }
         
-        # Проверяем лимит ходов
+        # Check the move limit
         if move_count > max_moves:
-            print(f"\nДостигнут лимит ходов ({max_moves}). Ничья.")
+            print(f"\nMove limit reached ({max_moves}). Draw.")
             return {
                 'result': 'max_moves',
                 'winner': None,
@@ -146,14 +146,14 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
                 'avg_move_time': sum(move_times) / len(move_times) if move_times else 0
             }
         
-        # Выбираем и делаем ход
+        # Choose and play a move
         move_start = time.time()
         move = choose_move_with_exploration(gamestate, depth, exploration_rate)
         move_time = time.time() - move_start
         move_times.append(move_time)
         
         if move is None:
-            print("Ошибка: нет доступных ходов!")
+            print("Error: no moves available!")
             return {
                 'result': 'error',
                 'winner': None,
@@ -162,11 +162,11 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
                 'avg_move_time': sum(move_times) / len(move_times) if move_times else 0
             }
         
-        print(f"  Время расчета: {move_time:.1f}с")
+        print(f"  Think time: {move_time:.1f}s")
         
-        # Делаем ход
+        # Make the move
         if not gamestate.make_move(move):
-            print(f"Ошибка: невозможно сделать ход {format_move_for_print(move)}")
+            print(f"Error: cannot play move {format_move_for_print(move)}")
             return {
                 'result': 'error',
                 'winner': None,
@@ -175,15 +175,15 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
                 'avg_move_time': sum(move_times) / len(move_times) if move_times else 0
             }
         
-        # Обрабатываем промоушен если нужно
+        # Handle promotion if needed
         if gamestate.needs_promotion_choice:
             promo_piece = 'R' if gamestate.current_turn == 'b' else 'r'
             gamestate.complete_promotion(promo_piece)
         
-        # Сохраняем кэш после каждого хода
+        # Save the cache after every move
         ai.save_move_cache_to_db(ai.move_cache)
     
-    # Если получили сигнал прерывания
+    # If an interrupt was received
     return {
         'result': 'interrupted',
         'winner': None,
@@ -195,27 +195,27 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
 
 def run_self_play_training(num_games: int = None, depth: int = 6, exploration_rate: float = 0.2):
     """
-    Запускает режим самообучения
+    Runs the self-play training mode.
     
     Args:
-        num_games: Количество игр для проведения (None = бесконечно)
-        depth: Глубина поиска AI
-        exploration_rate: Вероятность выбора 2-го лучшего хода
+        num_games: Number of games to play (None = unlimited)
+        depth: AI search depth
+        exploration_rate: Probability of picking the 2nd-best move
     """
     global shutdown_requested
     
     print("\n" + "="*60)
-    print("РЕЖИМ САМООБУЧЕНИЯ")
+    print("SELF-PLAY TRAINING MODE")
     print("="*60)
-    print(f"Параметры:")
-    print(f"  - Глубина поиска: {depth}")
-    print(f"  - Вероятность исследования: {exploration_rate*100:.0f}%")
-    print(f"  - Количество игр: {'∞' if num_games is None else num_games}")
-    print(f"\nДля остановки нажмите Ctrl+C")
+    print(f"Parameters:")
+    print(f"  - Search depth: {depth}")
+    print(f"  - Exploration probability: {exploration_rate*100:.0f}%")
+    print(f"  - Number of games: {'∞' if num_games is None else num_games}")
+    print(f"\nPress Ctrl+C to stop")
     print("="*60)
     
-    # Загружаем кэш из БД
-    print("\nЗагрузка кэша ходов из базы данных...")
+    # Load the cache from the DB
+    print("\nLoading the move cache from the database...")
     ai.load_move_cache_from_db()
     
     stats = {
@@ -237,93 +237,93 @@ def run_self_play_training(num_games: int = None, depth: int = 6, exploration_ra
     try:
         while not shutdown_requested:
             if num_games is not None and game_num >= num_games:
-                print(f"\nВыполнено {num_games} игр. Завершаем...")
+                print(f"\nPlayed {num_games} games. Finishing...")
                 break
             
             game_num += 1
             print(f"\n{'='*60}")
-            print(f"ПАРТИЯ {game_num}" + (f" / {num_games}" if num_games else ""))
+            print(f"GAME {game_num}" + (f" / {num_games}" if num_games else ""))
             print(f"{'='*60}")
             
             result = play_self_game(depth, exploration_rate)
             
-            # Обновляем статистику
+            # Update the statistics
             stats['total_games'] += 1
             stats[result['result']] = stats.get(result['result'], 0) + 1
             stats['total_moves'] += result['moves']
             stats['total_time'] += result['duration']
             
-            if result.get('winner') == 'Белые':
+            if result.get('winner') == 'White':
                 stats['white_wins'] += 1
-            elif result.get('winner') == 'Черные':
+            elif result.get('winner') == 'Black':
                 stats['black_wins'] += 1
             
-            # Выводим промежуточную статистику
+            # Print interim statistics
             print("\n" + "-"*60)
-            print("Статистика текущей партии:")
-            print(f"  Результат: {result['result']}")
+            print("Current game statistics:")
+            print(f"  Result: {result['result']}")
             if result.get('winner'):
-                print(f"  Победитель: {result['winner']}")
-            print(f"  Ходов: {result['moves']}")
-            print(f"  Длительность: {result['duration']:.1f}с")
-            print(f"  Среднее время хода: {result['avg_move_time']:.1f}с")
+                print(f"  Winner: {result['winner']}")
+            print(f"  Moves: {result['moves']}")
+            print(f"  Duration: {result['duration']:.1f}s")
+            print(f"  Average move time: {result['avg_move_time']:.1f}s")
             
-            print("\nОбщая статистика:")
-            print(f"  Всего игр: {stats['total_games']}")
-            print(f"  Мат: {stats['checkmate']} ({stats['checkmate']/stats['total_games']*100:.1f}%)")
-            print(f"    - Победы белых: {stats['white_wins']}")
-            print(f"    - Победы черных: {stats['black_wins']}")
-            print(f"  Пат: {stats['stalemate']} ({stats['stalemate']/stats['total_games']*100:.1f}%)")
-            print(f"  Лимит ходов: {stats['max_moves']}")
-            print(f"  Среднее ходов в партии: {stats['total_moves']/stats['total_games']:.1f}")
-            print(f"  Среднее время партии: {stats['total_time']/stats['total_games']:.1f}с")
-            print(f"  Размер кэша: {len(ai.move_cache)} позиций")
+            print("\nOverall statistics:")
+            print(f"  Total games: {stats['total_games']}")
+            print(f"  Checkmate: {stats['checkmate']} ({stats['checkmate']/stats['total_games']*100:.1f}%)")
+            print(f"    - White wins: {stats['white_wins']}")
+            print(f"    - Black wins: {stats['black_wins']}")
+            print(f"  Stalemate: {stats['stalemate']} ({stats['stalemate']/stats['total_games']*100:.1f}%)")
+            print(f"  Move limit: {stats['max_moves']}")
+            print(f"  Average moves per game: {stats['total_moves']/stats['total_games']:.1f}")
+            print(f"  Average game time: {stats['total_time']/stats['total_games']:.1f}s")
+            print(f"  Cache size: {len(ai.move_cache)} positions")
             print("-"*60)
             
             if result['result'] == 'interrupted':
                 break
     
     except KeyboardInterrupt:
-        print("\n\nПолучен сигнал прерывания...")
+        print("\n\nInterrupt received...")
     
     finally:
-        # Финальное сохранение кэша
+        # Final cache save
         print("\n" + "="*60)
-        print("Сохранение кэша в базу данных...")
+        print("Saving the cache to the database...")
         ai.save_move_cache_to_db(ai.move_cache)
         
         training_duration = time.time() - training_start
         
         print("\n" + "="*60)
-        print("ФИНАЛЬНАЯ СТАТИСТИКА")
+        print("FINAL STATISTICS")
         print("="*60)
-        print(f"Всего игр: {stats['total_games']}")
-        print(f"Время обучения: {training_duration/60:.1f} минут")
+        print(f"Total games: {stats['total_games']}")
+        print(f"Training time: {training_duration/60:.1f} minutes")
         if stats['total_games'] > 0:
-            print(f"\nРезультаты:")
-            print(f"  Мат: {stats['checkmate']} ({stats['checkmate']/stats['total_games']*100:.1f}%)")
-            print(f"    - Победы белых: {stats['white_wins']}")
-            print(f"    - Победы черных: {stats['black_wins']}")
-            print(f"  Пат: {stats['stalemate']} ({stats['stalemate']/stats['total_games']*100:.1f}%)")
-            print(f"  Лимит ходов: {stats['max_moves']}")
-            print(f"  Ошибки: {stats['errors']}")
-            print(f"  Прервано: {stats['interrupted']}")
-            print(f"\nСтатистика игры:")
-            print(f"  Среднее ходов: {stats['total_moves']/stats['total_games']:.1f}")
-            print(f"  Среднее время партии: {stats['total_time']/stats['total_games']:.1f}с")
-            print(f"  Всего ходов: {stats['total_moves']}")
-        print(f"\nРазмер кэша: {len(ai.move_cache)} позиций")
+            print(f"\nResults:")
+            print(f"  Checkmate: {stats['checkmate']} ({stats['checkmate']/stats['total_games']*100:.1f}%)")
+            print(f"    - White wins: {stats['white_wins']}")
+            print(f"    - Black wins: {stats['black_wins']}")
+            print(f"  Stalemate: {stats['stalemate']} ({stats['stalemate']/stats['total_games']*100:.1f}%)")
+            print(f"  Move limit: {stats['max_moves']}")
+            print(f"  Errors: {stats['errors']}")
+            print(f"  Interrupted: {stats['interrupted']}")
+            print(f"\nGame statistics:")
+            print(f"  Average moves: {stats['total_moves']/stats['total_games']:.1f}")
+            print(f"  Average game time: {stats['total_time']/stats['total_games']:.1f}s")
+            print(f"  Total moves: {stats['total_moves']}")
+        print(f"\nCache size: {len(ai.move_cache)} positions")
         print("="*60)
 
 
 def main():
-    """Точка входа"""
+    """Entry point."""
     setup_signal_handlers()
     
-    # Параметры самообучения
-    num_games = None  # None = бесконечно, или укажите число
-    depth = 6         # Глубина поиска (можно уменьшить если очень долго)
-    exploration_rate = 0.2  # 20% вероятность выбора 2-го лучшего хода
+    # Self-play parameters
+    num_games = None  # None = unlimited, or give a number
+    depth = 6         # Search depth (lower it if this is too slow)
+    exploration_rate = 0.2  # 20% chance of picking the 2nd-best move
     
     run_self_play_training(num_games, depth, exploration_rate)
 

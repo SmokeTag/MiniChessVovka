@@ -2,14 +2,14 @@
 
 # --- Game Constants ---
 BOARD_SIZE = 6
-SQUARE_SIZE = 100  # Увеличенный размер клетки для красоты
-TOTAL_WIDTH = BOARD_SIZE * SQUARE_SIZE  # Общая ширина доски
-SIDE_PANEL_WIDTH = 300  # Боковая панель
-INFO_HEIGHT = 0  # Не используется (всё в боковой панели)
-WIDTH = TOTAL_WIDTH + SIDE_PANEL_WIDTH  # Общая ширина окна
-HEIGHT = TOTAL_WIDTH  # Высота = доска
+SQUARE_SIZE = 100  # Larger square size, for looks
+TOTAL_WIDTH = BOARD_SIZE * SQUARE_SIZE  # Total board width
+SIDE_PANEL_WIDTH = 300  # Side panel
+INFO_HEIGHT = 0  # Unused (everything lives in the side panel)
+WIDTH = TOTAL_WIDTH + SIDE_PANEL_WIDTH  # Total window width
+HEIGHT = TOTAL_WIDTH  # Height = board
 FPS = 30
-AI_MOVE_DELAY = 1.5  # Задержка перед ходом ИИ (секунды) — чтобы видеть ходы
+AI_MOVE_DELAY = 1.5  # Delay before the AI moves (seconds) — so the moves are visible
 
 # --- Colors ---
 WHITE = (255, 255, 255)
@@ -51,23 +51,23 @@ HIGHLIGHT_COLORS = {
     'toggle_ai_hover': (140, 220, 170)
 }
 
-# Прозрачный цвет для возможных ходов
-POSSIBLE_MOVE_COLOR = (80, 150, 105, 170)  # Более темный зеленый для возможных ходов
+# Translucent color for legal moves
+POSSIBLE_MOVE_COLOR = (80, 150, 105, 170)  # Darker green for legal moves
 
-# Позиционные бонусы/штрафы (для AI)
+# Positional bonuses/penalties (for the AI)
 CENTER_SQUARES = [(2, 2), (2, 3), (3, 2), (3, 3)] # c4, d4, c3, d3
-CENTER_BONUS = 25 # Увеличен бонус за контроль центра
-DEVELOPMENT_PENALTY = -10 # Штраф для B/N на стартовых позициях после нескольких ходов? (сложно) - Not directly used in evaluate_position currently
-PAWN_STRUCTURE_BONUS = 15 # Увеличен бонус за хорошие пешечные структуры
-KING_SAFETY_BONUS = 30 # Увеличен бонус за безопасность короля
-MOBILITY_BONUS = 8  # Бонус за мобильность (количество ходов)
-ATTACK_BONUS = 15  # Бонус за атаку/угрозу - Not directly used in evaluate_position currently
+CENTER_BONUS = 25 # Increased bonus for center control
+DEVELOPMENT_PENALTY = -10 # Penalty for B/N still on their starting squares after a few moves? (tricky) - Not directly used in evaluate_position currently
+PAWN_STRUCTURE_BONUS = 15 # Increased bonus for good pawn structures
+KING_SAFETY_BONUS = 30 # Increased bonus for king safety
+MOBILITY_BONUS = 8  # Bonus for mobility (number of moves)
+ATTACK_BONUS = 15  # Bonus for attacks/threats - Not directly used in evaluate_position currently
 
-# Фаза игры влияет на оценку позиции (для AI)
-OPENING_PHASE = 12  # Начальное число фигур (не включая пешки) на доске
-ENDGAME_PHASE = 4   # Переход в эндшпиль
+# Game phase affects position evaluation (for the AI)
+OPENING_PHASE = 12  # Starting number of pieces (excluding pawns) on the board
+ENDGAME_PHASE = 4   # Transition into the endgame
 
-# Цвета фона для фигур (используется в примитивах рисования в pieces.py)
+# Background colors for pieces (used by the drawing primitives in pieces.py)
 PIECE_BG_COLORS = {
     'K': (220, 220, 255), 'R': (220, 255, 220),
     'B': (255, 255, 220), 'N': (220, 255, 255), 'P': (255, 220, 255),

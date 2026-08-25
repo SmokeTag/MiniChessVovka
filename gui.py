@@ -26,7 +26,8 @@ FONT_STATUS = pygame.font.SysFont('segoeui', 16, bold=True)
 # --- Image Loading and Helper Functions ---
 
 def get_screen_coords(logical_coords, board_flipped):
-    """Преобразует логические координаты (row, col) в экранные пиксельные координаты (x, y) левого верхнего угла клетки, учитывая переворот доски."""
+    """Converts logical (row, col) coordinates into on-screen pixel (x, y)
+    coordinates of the square's top-left corner, accounting for board flip."""
     r, f = logical_coords
     if board_flipped:
         screen_row = BOARD_SIZE - 1 - r
@@ -120,7 +121,7 @@ def load_images(image_dir="assets/sprites", target_piece_size=int(SQUARE_SIZE * 
         'knight': ('horse.png', 'n', 'N'),
         'bishop': ('bishop.png', 'b', 'B'),
         'rook':   ('rookie.png', 'r', 'R'),
-        # 'queen':  ('queen.png', 'q', 'Q'), # <<< УБРАНО, так как queen.png отсутствует
+        # 'queen':  ('queen.png', 'q', 'Q'), # <<< REMOVED, since queen.png is missing
         'king':   ('king.png', 'k', 'K')
     }
 
