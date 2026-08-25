@@ -521,8 +521,10 @@ fn find_best_move(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, retu
     let d = depth.unwrap_or(6);
     let top_n = return_top_n.unwrap_or(1);
     
-    let mut cache = MOVE_CACHE.lock().unwrap();
-    let (best, score) = search::find_best_move(&mut gs.inner, d, &mut cache, time_limit);
+    let (best, score) = py.allow_threads(|| {
+        let mut cache = MOVE_CACHE.lock().unwrap();
+        search::find_best_move(&mut gs.inner, d, &mut cache, time_limit)
+    });
     
     if top_n == 1 {
         Ok(rust_move_to_py(py, best))
