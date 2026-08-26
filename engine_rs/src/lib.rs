@@ -194,12 +194,7 @@ impl PyGameState {
     }
 
     fn undo_move(&mut self) -> bool {
-        // Simple: undo last AI move if available
-        if self.inner.ai_history.is_empty() {
-            return false;
-        }
-        self.inner.undo_ai_move();
-        true
+        self.inner.undo_move()
     }
 
     fn make_ai_move(&mut self, py: Python<'_>, m: &Bound<'_, PyAny>) -> PyResult<bool> {
@@ -428,6 +423,24 @@ impl PyGameState {
 
     #[getter]
     fn game_over_message(&self) -> &str { &self.inner.game_over_message }
+
+    #[getter]
+    fn is_draw(&self) -> bool { self.inner.is_draw }
+
+    #[setter]
+    fn set_is_draw(&mut self, v: bool) { self.inner.is_draw = v; }
+
+    #[getter]
+    fn ply(&self) -> u32 { self.inner.ply }
+
+    #[getter]
+    fn ply_limit(&self) -> u32 { self.inner.ply_limit }
+
+    #[setter]
+    fn set_ply_limit(&mut self, v: u32) { self.inner.ply_limit = v; }
+
+    /// How many times the current position has occurred in this game.
+    fn repetition_count(&self) -> usize { self.inner.repetition_count() }
 
     #[getter]
     fn needs_promotion_choice(&self) -> bool { self.inner.needs_promotion_choice }
