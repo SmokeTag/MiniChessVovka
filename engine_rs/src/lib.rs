@@ -516,14 +516,14 @@ impl PyGameState {
 
 // Module-level AI functions
 #[pyfunction]
-#[pyo3(signature = (gs, depth=None, return_top_n=None, time_limit=None))]
-fn find_best_move(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, return_top_n: Option<i32>, time_limit: Option<f64>) -> PyResult<PyObject> {
+#[pyo3(signature = (gs, depth=None, return_top_n=None, time_limit=None, parallel=None))]
+fn find_best_move(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, return_top_n: Option<i32>, time_limit: Option<f64>, parallel: Option<bool>) -> PyResult<PyObject> {
     let d = depth.unwrap_or(6);
     let top_n = return_top_n.unwrap_or(1);
     
     let (best, score) = py.allow_threads(|| {
         let mut cache = MOVE_CACHE.lock().unwrap();
-        search::find_best_move(&mut gs.inner, d, &mut cache, time_limit)
+        search::find_best_move(&mut gs.inner, d, &mut cache, time_limit, parallel)
     });
     
     if top_n == 1 {
@@ -540,6 +540,25 @@ fn find_best_move(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, retu
         }
         Ok(list.into())
     }
+}
+
+/// Turn the root-level parallel search on or off for this process.
+/// Off by default, which keeps self-play training single-threaded.
+#[pyfunction]
+#[pyo3(signature = (enabled, min_depth=None))]
+fn set_parallel_search(enabled: bool, min_depth: Option<i32>) {
+    search::set_parallel_search(enabled, min_depth);
+}
+
+/// Returns (enabled, min_depth) for the root-level parallel search.
+#[pyfunction]
+fn get_parallel_search(py: Python<'_>) -> PyResult<PyObject> {
+    let (enabled, min_depth) = search::parallel_search_config();
+    let tup = PyTuple::new(py, &[
+        enabled.into_pyobject(py)?.to_owned().into_any().unbind(),
+        min_depth.into_pyobject(py)?.into_any().unbind(),
+    ])?;
+    Ok(tup.into())
 }
 
 #[pyfunction]
@@ -590,6 +609,8 @@ fn parse_move_string(py: Python<'_>, s: &str) -> PyResult<PyObject> {
 fn minichess_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGameState>()?;
     m.add_function(wrap_pyfunction!(find_best_move, m)?)?;
+    m.add_function(wrap_pyfunction!(set_parallel_search, m)?)?;
+    m.add_function(wrap_pyfunction!(get_parallel_search, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_position, m)?)?;
     m.add_function(wrap_pyfunction!(get_position_hash, m)?)?;
     m.add_function(wrap_pyfunction!(load_move_cache_from_db, m)?)?;

@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::types::*;
@@ -7,9 +9,33 @@ use crate::eval::{evaluate_position, CHECKMATE_SCORE, STALEMATE_SCORE};
 use crate::zobrist;
 
 const MAX_QUIESCENCE_DEPTH: i32 = 4;
-// Parallel search disabled — single-threaded minimax_ab is correct and fast enough
-// (parallel had bugs: no move ordering, stale TT, missing killer/history in workers)
-const PARALLEL_DEPTH_THRESHOLD: i32 = 999;
+
+// Root-level parallel search is a runtime knob, not a compile-time constant.
+// Default is OFF: self-play training runs many independent games side by side across
+// cores, which scales better than parallelising a single game. Interactive analysis
+// turns it on to throw every core at one position.
+const DEFAULT_PARALLEL_MIN_DEPTH: i32 = 3;
+static PARALLEL_ENABLED: AtomicBool = AtomicBool::new(false);
+static PARALLEL_MIN_DEPTH: AtomicI32 = AtomicI32::new(DEFAULT_PARALLEL_MIN_DEPTH);
+
+/// Enable or disable the root-level parallel search process-wide.
+/// `min_depth` is the first iterative-deepening iteration that gets split across
+/// threads; shallower iterations stay sequential because the fan-out costs more
+/// than it saves. `None` keeps the current minimum depth.
+pub fn set_parallel_search(enabled: bool, min_depth: Option<i32>) {
+    if let Some(d) = min_depth {
+        PARALLEL_MIN_DEPTH.store(d.max(1), Ordering::Relaxed);
+    }
+    PARALLEL_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Current `(enabled, min_depth)` of the root-level parallel search.
+pub fn parallel_search_config() -> (bool, i32) {
+    (
+        PARALLEL_ENABLED.load(Ordering::Relaxed),
+        PARALLEL_MIN_DEPTH.load(Ordering::Relaxed),
+    )
+}
 
 // TT entry
 #[derive(Clone)]
@@ -29,6 +55,9 @@ pub enum TTFlag {
 
 pub struct SearchState {
     pub tt: HashMap<u64, TTEntry>,
+    /// Read-only transposition entries shared with the root workers. Probed after the
+    /// local table misses; never written to, so no locking is needed.
+    pub base_tt: Option<Arc<HashMap<u64, TTEntry>>>,
     pub killer_moves: HashMap<i32, [Move; 2]>,
     pub history_scores: HashMap<u32, i32>, // move.data -> score
     pub deadline: Option<Instant>,
@@ -38,8 +67,15 @@ pub struct SearchState {
 
 impl SearchState {
     pub fn new() -> Self {
+        SearchState::with_tt_capacity(1 << 20)
+    }
+
+    /// Root workers are short-lived and there can be one per core, so they ask for a
+    /// small table instead of pre-allocating the full-size one the root search uses.
+    pub fn with_tt_capacity(cap: usize) -> Self {
         SearchState {
-            tt: HashMap::with_capacity(1 << 20),
+            tt: HashMap::with_capacity(cap),
+            base_tt: None,
             killer_moves: HashMap::new(),
             history_scores: HashMap::new(),
             deadline: None,
@@ -50,8 +86,18 @@ impl SearchState {
 
     pub fn clear(&mut self) {
         self.tt.clear();
+        self.base_tt = None;
         self.killer_moves.clear();
         self.history_scores.clear();
+    }
+
+    /// Probe the local table, falling back to the shared read-only snapshot.
+    #[inline]
+    pub fn tt_get(&self, hash: u64) -> Option<TTEntry> {
+        if let Some(e) = self.tt.get(&hash) {
+            return Some(e.clone());
+        }
+        self.base_tt.as_ref().and_then(|b| b.get(&hash).cloned())
     }
 
     /// Check deadline every 4096 nodes to avoid syscall overhead
@@ -350,7 +396,7 @@ fn minimax_ab(
     }
 
     let pos_hash = gs.hash;
-    let tt_entry = ss.tt.get(&pos_hash).cloned();
+    let tt_entry = ss.tt_get(pos_hash);
 
     let mut legal_moves = gs.get_legal_moves_vec();
     if legal_moves.is_empty() {
@@ -530,7 +576,19 @@ fn minimax_ab(
     }
 }
 
-// Worker function for parallel search
+// Read-only transposition snapshot shared by every root worker. Sharing it behind an
+// Arc instead of cloning the map per worker keeps the fan-out cheap.
+type SharedTT = Arc<HashMap<u64, TTEntry>>;
+
+/// Move-ordering heuristics handed down from the root search to every worker.
+struct RootHeuristics {
+    killer_moves: HashMap<i32, [Move; 2]>,
+    history_scores: HashMap<u32, i32>,
+}
+
+/// Searches one root move in its own SearchState, on its own copy of the board.
+/// Returns `(move, score, tt_entries, aborted)`. When `aborted` is true the score and
+/// the transposition entries come from truncated subtrees and must not be trusted.
 fn search_worker(
     gs: &GameState,
     m: Move,
@@ -538,14 +596,29 @@ fn search_worker(
     alpha: i32,
     beta: i32,
     maximizing: bool,
-    tt_snapshot: &HashMap<u64, TTEntry>,
-) -> (Move, i32, HashMap<u64, TTEntry>) {
+    base_tt: &SharedTT,
+    heuristics: &RootHeuristics,
+    deadline: Option<Instant>,
+) -> (Move, i32, HashMap<u64, TTEntry>, bool) {
     let mut gs_copy = gs.fast_copy();
-    let mut ss = SearchState::new();
-    ss.tt = tt_snapshot.clone();
+    let mut ss = SearchState::with_tt_capacity(1 << 14);
+    ss.base_tt = Some(Arc::clone(base_tt));
+    // Seed the ordering heuristics from the root so workers order moves the way the
+    // sequential search would; starting them empty makes the two paths drift.
+    ss.killer_moves = heuristics.killer_moves.clone();
+    ss.history_scores = heuristics.history_scores.clone();
+    ss.deadline = deadline;
 
     gs_copy.make_ai_move(m);
-    let score = minimax_recursive(&mut gs_copy, depth - 1, alpha, beta, !maximizing, true, &mut ss);
+    // Workers run the very same routine as the sequential search, so the two paths
+    // cannot drift apart in what they score or how they prune.
+    let (score, _) = minimax_ab(&mut gs_copy, depth - 1, alpha, beta, !maximizing, true, &mut ss);
+
+    // An aborted worker returns a score built on cut-off subtrees, and every TT entry it
+    // wrote below the abort point is just as suspect. Hand back nothing but the stop flag.
+    if ss.stopped {
+        return (m, score, HashMap::new(), true);
+    }
 
     // Collect valuable TT entries
     let min_depth = (depth - 3).max(1);
@@ -553,231 +626,160 @@ fn search_worker(
         .filter(|(_, e)| e.depth >= min_depth && !e.best_move.is_null())
         .collect();
 
-    (m, score, valuable)
+    (m, score, valuable, false)
 }
 
-// Non-tuple-returning recursive version for workers
-fn minimax_recursive(
-    gs: &mut GameState,
-    mut depth: i32,
-    mut alpha: i32,
-    mut beta: i32,
-    maximizing: bool,
-    allow_null: bool,
-    ss: &mut SearchState,
-) -> i32 {
-    let current_color = if maximizing { Color::White } else { Color::Black };
-    let in_check = gs.is_in_check(current_color);
-    if in_check && depth < 3 { depth += 1; }
-
-    if depth <= 0 {
-        return quiescence_search(gs, alpha, beta, maximizing, MAX_QUIESCENCE_DEPTH);
-    }
-
-    let mut legal_moves = gs.get_legal_moves_vec();
-    if legal_moves.is_empty() {
-        if gs.is_in_check(gs.current_turn) {
-            return if gs.current_turn == Color::White { -CHECKMATE_SCORE } else { CHECKMATE_SCORE };
+/// Fold a worker's harvested transposition entries into the root table, keeping the
+/// deeper of the two whenever both searched the same position.
+fn merge_worker_tt(ss: &mut SearchState, worker_tt: &HashMap<u64, TTEntry>) {
+    for (h, e) in worker_tt {
+        let deeper = ss.tt.get(h).map_or(true, |ex| e.depth > ex.depth);
+        if deeper {
+            ss.tt.insert(*h, e.clone());
         }
-        return STALEMATE_SCORE;
-    }
-
-    let pos_hash = gs.hash;
-    let tt_entry = ss.tt.get(&pos_hash).cloned();
-    if let Some(ref entry) = tt_entry {
-        if entry.depth >= depth {
-            match entry.flag {
-                TTFlag::Exact => return entry.score,
-                TTFlag::LowerBound => alpha = alpha.max(entry.score),
-                TTFlag::UpperBound => beta = beta.min(entry.score),
-            }
-            if alpha >= beta { return entry.score; }
-        }
-    }
-
-    // Null-move pruning
-    let null_r = 2;
-    let opp = current_color.opposite();
-    let opp_hand: u8 = gs.hands[opp.index()].iter().sum();
-    if allow_null && depth >= null_r + 1 && !in_check && opp_hand == 0 {
-        gs.current_turn = gs.current_turn.opposite();
-        gs.hash = gs.compute_hash();
-        gs.invalidate_cache();
-        let null_score = minimax_recursive(gs, depth - 1 - null_r, alpha, beta, !maximizing, false, ss);
-        gs.current_turn = gs.current_turn.opposite();
-        gs.hash = gs.compute_hash();
-        gs.invalidate_cache();
-        if maximizing && null_score >= beta { return beta; }
-        if !maximizing && null_score <= alpha { return alpha; }
-    }
-
-    // Move ordering
-    let tt_best = tt_entry.as_ref().map(|e| e.best_move).unwrap_or(Move::NULL);
-    let mut scored: Vec<(Move, i32)> = legal_moves.iter().map(|&m| {
-        let s = if !tt_best.is_null() && m == tt_best { 1_000_000 }
-        else { mvv_lva_score(gs, m, ss) };
-        (m, s)
-    }).collect();
-    scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-    legal_moves = scored.into_iter().map(|(m, _)| m).collect();
-
-    let orig_alpha = alpha;
-    let mut best_move = legal_moves[0];
-    let lmr_full = 4;
-    let lmr_limit = 3;
-
-    if maximizing {
-        let mut max_eval = i32::MIN;
-        for (i, &m) in legal_moves.iter().enumerate() {
-            let noisy = is_noisy_move(gs, m);
-            gs.make_ai_move(m);
-            let gives_check = gs.is_in_check(gs.current_turn);
-
-            let eval_score = if i == 0 {
-                minimax_recursive(gs, depth - 1, alpha, beta, false, true, ss)
-            } else {
-                let reduced = i >= lmr_full && depth >= lmr_limit && !noisy && !gives_check;
-                let s = if reduced {
-                    minimax_recursive(gs, depth - 2, alpha, alpha + 1, false, true, ss)
-                } else {
-                    minimax_recursive(gs, depth - 1, alpha, alpha + 1, false, true, ss)
-                };
-                if alpha < s && s < beta {
-                    minimax_recursive(gs, depth - 1, alpha, beta, false, true, ss)
-                } else {
-                    s
-                }
-            };
-            gs.undo_ai_move();
-
-            if eval_score >= CHECKMATE_SCORE { return CHECKMATE_SCORE; }
-            if eval_score > max_eval { max_eval = eval_score; best_move = m; }
-            alpha = alpha.max(eval_score);
-            if beta <= alpha { break; }
-        }
-        let flag = if max_eval <= orig_alpha { TTFlag::UpperBound }
-                   else if max_eval >= beta { TTFlag::LowerBound }
-                   else { TTFlag::Exact };
-        ss.tt.insert(pos_hash, TTEntry { depth, score: max_eval, flag, best_move });
-        max_eval
-    } else {
-        let mut min_eval = i32::MAX;
-        for (i, &m) in legal_moves.iter().enumerate() {
-            let noisy = is_noisy_move(gs, m);
-            gs.make_ai_move(m);
-            let gives_check = gs.is_in_check(gs.current_turn);
-
-            let eval_score = if i == 0 {
-                minimax_recursive(gs, depth - 1, alpha, beta, true, true, ss)
-            } else {
-                let reduced = i >= lmr_full && depth >= lmr_limit && !noisy && !gives_check;
-                let s = if reduced {
-                    minimax_recursive(gs, depth - 2, beta - 1, beta, true, true, ss)
-                } else {
-                    minimax_recursive(gs, depth - 1, beta - 1, beta, true, true, ss)
-                };
-                if alpha < s && s < beta {
-                    minimax_recursive(gs, depth - 1, alpha, beta, true, true, ss)
-                } else {
-                    s
-                }
-            };
-            gs.undo_ai_move();
-
-            if eval_score <= -CHECKMATE_SCORE { return -CHECKMATE_SCORE; }
-            if eval_score < min_eval { min_eval = eval_score; best_move = m; }
-            beta = beta.min(eval_score);
-            if beta <= alpha { break; }
-        }
-        let flag = if min_eval >= beta { TTFlag::LowerBound }
-                   else if min_eval <= orig_alpha { TTFlag::UpperBound }
-                   else { TTFlag::Exact };
-        ss.tt.insert(pos_hash, TTEntry { depth, score: min_eval, flag, best_move });
-        min_eval
     }
 }
 
-// Parallel minimax at root level
+// Parallel minimax at root level.
+//
+// Same PVS shape minimax_ab uses at every other node, spread across cores: order the
+// root moves, search the best one sequentially for a real alpha, scout all the others
+// in parallel against a null window, and re-search at full width only those that beat
+// it. The returned score is therefore a full-window score of the returned move.
 fn minimax_parallel(
     gs: &mut GameState,
     depth: i32,
     ss: &mut SearchState,
 ) -> (Move, i32, Vec<(Move, i32)>) {
-    let legal_moves = gs.get_legal_moves_vec();
+    let mut legal_moves = gs.get_legal_moves_vec();
     if legal_moves.is_empty() {
         return (Move::NULL, 0, vec![]);
     }
 
     let maximizing = gs.current_turn == Color::White;
+    let deadline = ss.deadline;
+    let neg_inf = i32::MIN + 1;
+    let inf = i32::MAX - 1;
 
-    // TT snapshot for workers (filter by useful depth)
-    let min_useful = (depth - 3).max(1);
-    let tt_snapshot: HashMap<u64, TTEntry> = ss.tt.iter()
-        .filter(|(_, e)| e.depth >= min_useful)
-        .map(|(k, v)| (*k, v.clone()))
+    // Root move ordering, same keys as minimax_ab: TT move, then killers, then mvv/lva.
+    // Without this the baseline move is arbitrary and every scout fails high.
+    let tt_best = ss.tt_get(gs.hash).map(|e| e.best_move).unwrap_or(Move::NULL);
+    let killers = ss.killer_moves.get(&depth).cloned().unwrap_or([Move::NULL; 2]);
+    let mut scored: Vec<(Move, i32)> = legal_moves
+        .iter()
+        .map(|&m| {
+            let s = if !tt_best.is_null() && m == tt_best {
+                1_000_000
+            } else if m == killers[0] || m == killers[1] {
+                50_000
+            } else {
+                mvv_lva_score(gs, m, ss)
+            };
+            (m, s)
+        })
         .collect();
+    scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    legal_moves = scored.into_iter().map(|(m, _)| m).collect();
 
-    // Search first move sequentially for baseline
+    // Baseline: full-window search of the best-ordered move, in the root's own state so
+    // it sees the whole transposition table — byte for byte what the sequential root does.
     let first_move = legal_moves[0];
-    let (_, baseline, first_tt) = search_worker(gs, first_move, depth, i32::MIN, i32::MAX, maximizing, &tt_snapshot);
-    let asp_window = 150;
-    let asp_alpha = baseline - asp_window;
-    let asp_beta = baseline + asp_window;
-
-    // Merge first worker's TT
-    for (h, e) in &first_tt {
-        let existing = ss.tt.get(h);
-        if existing.map_or(true, |ex| e.depth > ex.depth) {
-            ss.tt.insert(*h, e.clone());
-        }
+    let baseline_start = Instant::now();
+    gs.make_ai_move(first_move);
+    let (baseline, _) = minimax_ab(gs, depth - 1, neg_inf, inf, !maximizing, true, ss);
+    gs.undo_ai_move();
+    let baseline_secs = baseline_start.elapsed().as_secs_f64();
+    if ss.stopped {
+        // Without a trustworthy baseline every scout window below is meaningless.
+        return (Move::NULL, 0, vec![]);
     }
 
-    // Search remaining moves in parallel
-    let remaining: Vec<Move> = legal_moves[1..].to_vec();
-    let gs_snapshot = gs.fast_copy();
-    let tt_snap = tt_snapshot.clone();
+    let mut best_move = first_move;
+    let mut best_score = baseline;
+    let mut all_results: Vec<(Move, i32)> = vec![(first_move, baseline)];
 
-    let results: Vec<(Move, i32, HashMap<u64, TTEntry>)> = {
-        use rayon::prelude::*;
-        remaining.par_iter().map(|&m| {
-            search_worker(&gs_snapshot, m, depth, asp_alpha, asp_beta, maximizing, &tt_snap)
-        }).collect()
+    // Snapshots for the workers, taken after the baseline so they inherit its work.
+    let min_useful = (depth - 3).max(1);
+    let base_tt: SharedTT = Arc::new(
+        ss.tt.iter()
+            .filter(|(_, e)| e.depth >= min_useful)
+            .map(|(k, v)| (*k, v.clone()))
+            .collect(),
+    );
+    let heuristics = RootHeuristics {
+        killer_moves: ss.killer_moves.clone(),
+        history_scores: ss.history_scores.clone(),
     };
 
-    let mut all_results: Vec<(Move, i32)> = vec![(first_move, baseline)];
-    let mut re_search = Vec::new();
+    // Scout every remaining move in parallel against a null window at the baseline.
+    let remaining: Vec<Move> = legal_moves[1..].to_vec();
+    let gs_snapshot = gs.fast_copy();
+    let (scout_alpha, scout_beta) = if maximizing {
+        (best_score, best_score + 1)
+    } else {
+        (best_score - 1, best_score)
+    };
 
-    for (m, score, worker_tt) in results {
-        // Merge worker TT
-        for (h, e) in &worker_tt {
-            let existing = ss.tt.get(h);
-            if existing.map_or(true, |ex| e.depth > ex.depth) {
-                ss.tt.insert(*h, e.clone());
-            }
+    let scout_start = Instant::now();
+    let scouted: Vec<(Move, i32, HashMap<u64, TTEntry>, bool)> = {
+        use rayon::prelude::*;
+        remaining.par_iter().map(|&m| {
+            search_worker(&gs_snapshot, m, depth, scout_alpha, scout_beta, maximizing, &base_tt, &heuristics, deadline)
+        }).collect()
+    };
+    let scout_secs = scout_start.elapsed().as_secs_f64();
+
+    let mut candidates: Vec<(Move, i32)> = Vec::new();
+    for (m, score, worker_tt, worker_stopped) in scouted {
+        if worker_stopped {
+            // Some root moves were never scored, so the best of the rest is not the best.
+            ss.stopped = true;
+            return (Move::NULL, 0, vec![]);
         }
+        merge_worker_tt(ss, &worker_tt);
 
-        if score <= asp_alpha || score >= asp_beta {
-            re_search.push(m);
+        let beats_baseline = if maximizing { score > scout_alpha } else { score < scout_beta };
+        if beats_baseline {
+            candidates.push((m, score));
         } else {
             all_results.push((m, score));
         }
     }
 
-    // Re-search moves outside aspiration window
-    for m in re_search {
-        let (_, score, worker_tt) = search_worker(gs, m, depth, i32::MIN, i32::MAX, maximizing, &tt_snapshot);
-        for (h, e) in &worker_tt {
-            let existing = ss.tt.get(h);
-            if existing.map_or(true, |ex| e.depth > ex.depth) {
-                ss.tt.insert(*h, e.clone());
-            }
+    // Re-search at full width only the moves that beat the baseline, best scout first so
+    // alpha climbs early and the rest get cut off quickly. These run in the root's state
+    // too, so the score reported for the winner is a full-TT, full-window score.
+    if maximizing {
+        candidates.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    } else {
+        candidates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+    }
+    let n_candidates = candidates.len();
+    let research_start = Instant::now();
+    for (m, _) in candidates {
+        let (window_alpha, window_beta) = if maximizing {
+            (best_score, inf)
+        } else {
+            (neg_inf, best_score)
+        };
+        gs.make_ai_move(m);
+        let (score, _) = minimax_ab(gs, depth - 1, window_alpha, window_beta, !maximizing, true, ss);
+        gs.undo_ai_move();
+        if ss.stopped {
+            return (Move::NULL, 0, vec![]);
         }
         all_results.push((m, score));
+
+        if (maximizing && score > best_score) || (!maximizing && score < best_score) {
+            best_score = score;
+            best_move = m;
+        }
     }
 
-    if all_results.is_empty() {
-        return (Move::NULL, 0, vec![]);
-    }
+    eprintln!(
+        "  [PARALLEL] depth {}: baseline {:.2}s, scout {:.2}s ({} moves), re-search {:.2}s ({} moves)",
+        depth, baseline_secs, scout_secs, remaining.len(), research_start.elapsed().as_secs_f64(), n_candidates
+    );
 
     // Check for mate
     let mating_score = if maximizing { CHECKMATE_SCORE } else { -CHECKMATE_SCORE };
@@ -786,13 +788,6 @@ fn minimax_parallel(
             return (m, s, all_results);
         }
     }
-
-    // Find best
-    let (best_move, best_score) = if maximizing {
-        *all_results.iter().max_by_key(|(_, s)| *s).unwrap()
-    } else {
-        *all_results.iter().min_by_key(|(_, s)| *s).unwrap()
-    };
 
     (best_move, best_score, all_results)
 }
@@ -803,6 +798,7 @@ pub fn find_best_move(
     depth: i32,
     move_cache: &mut HashMap<(String, i32), String>,
     time_limit: Option<f64>,
+    parallel: Option<bool>,
 ) -> (Move, i32) {
     let start = Instant::now();
     let maximizing = gs.current_turn == Color::White;
@@ -835,11 +831,20 @@ pub fn find_best_move(
     let mut best_move = Move::NULL;
     let mut best_score = 0i32;
 
+    // Per-call `parallel` wins over the process-wide setting; None means "use the setting".
+    let (global_parallel, parallel_min_depth) = parallel_search_config();
+    let use_parallel = parallel.unwrap_or(global_parallel);
+    // i32::MAX keeps the parallel branch unreachable when parallel search is off.
+    let parallel_threshold = if use_parallel { parallel_min_depth } else { i32::MAX };
+    if use_parallel {
+        eprintln!("  [PARALLEL] root split enabled from depth {}", parallel_threshold);
+    }
+
     for current_depth in 1..=depth {
         eprintln!("  [ID] depth {}...", current_depth);
         let iter_start = Instant::now();
 
-        if current_depth < PARALLEL_DEPTH_THRESHOLD {
+        if current_depth < parallel_threshold {
             let (score, m) = minimax_ab(gs, current_depth, i32::MIN + 1, i32::MAX - 1, maximizing, true, &mut ss);
             // If stopped mid-search, only use result if we have a previous best
             if ss.stopped {
@@ -858,6 +863,16 @@ pub fn find_best_move(
             }
         } else {
             let (m, score, _) = minimax_parallel(gs, current_depth, &mut ss);
+            // Same guard as the sequential path: an aborted iteration is not a result.
+            if ss.stopped {
+                if !m.is_null() && current_depth <= 2 {
+                    // Only trust very shallow aborted results
+                    best_move = m;
+                    best_score = score;
+                }
+                eprintln!("  Time limit reached during depth {}, aborting", current_depth);
+                break;
+            }
             if !m.is_null() {
                 best_move = m;
                 best_score = score;

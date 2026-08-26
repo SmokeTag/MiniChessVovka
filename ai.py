@@ -67,7 +67,29 @@ def evaluate_position(gamestate):
     return _rs.evaluate_position(rs)
 
 
-def find_best_move(gamestate, depth=6, return_top_n=1, time_limit=None):
+def set_parallel_search(enabled, min_depth=None):
+    """
+    Turn the engine's root-level parallel search on or off for this process.
+
+    Off by default, so self-play training stays single-threaded: training runs many
+    independent games side by side across cores, which scales better than
+    parallelising a single game. Interactive analysis of one position wants it on.
+
+    Args:
+        enabled: True to split the root move list across all cores, False for
+                 single-threaded search.
+        min_depth: First iterative-deepening depth that gets parallelised.
+                   None keeps the current value (default 3).
+    """
+    _rs.set_parallel_search(enabled, min_depth)
+
+
+def get_parallel_search():
+    """Return (enabled, min_depth) for the engine's root-level parallel search."""
+    return _rs.get_parallel_search()
+
+
+def find_best_move(gamestate, depth=6, return_top_n=1, time_limit=None, parallel=None):
     """
     Find the best move using Rust engine's iterative deepening alpha-beta search.
 
@@ -76,6 +98,8 @@ def find_best_move(gamestate, depth=6, return_top_n=1, time_limit=None):
         depth: Maximum search depth
         return_top_n: If > 1, returns list of (move, score) tuples
         time_limit: Max seconds for search. None = no limit.
+        parallel: True forces the parallel root search for this call, False forces
+                  single-threaded. None (default) uses set_parallel_search().
 
     Returns:
         If return_top_n == 1: best_move tuple or None
@@ -103,7 +127,7 @@ def find_best_move(gamestate, depth=6, return_top_n=1, time_limit=None):
     rs = _sync_to_rust(gamestate)
 
     # Call Rust search
-    result = _rs.find_best_move(rs, depth, return_top_n, time_limit)
+    result = _rs.find_best_move(rs, depth, return_top_n, time_limit, parallel)
 
     elapsed = time.time() - start_time
     print(f"AI ({gamestate.current_turn}) finished in {elapsed:.2f}s.")
