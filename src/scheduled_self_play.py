@@ -139,6 +139,7 @@ def update_progress(stats, training_start_time):
             f.write(f"    - White wins: {stats['white_wins']}\n")
             f.write(f"    - Black wins: {stats['black_wins']}\n")
             f.write(f"  - Stalemate: {stats['stalemate']} ({stats['stalemate']/stats['total_games']*100:.1f}%)\n")
+            f.write(f"  - Draw (repetition / ply limit): {stats['draw']} ({stats['draw']/stats['total_games']*100:.1f}%)\n")
             f.write(f"  - Move limit: {stats['max_moves']}\n\n")
             
             f.write("Statistics:\n")
@@ -338,6 +339,17 @@ def play_self_game(depth: int, exploration_rate: float, max_moves: int, game_num
                 'duration': time.time() - game_start,
                 'avg_move_time': sum(move_times) / len(move_times) if move_times else 0
             }
+
+        if gamestate.is_draw:
+            # Threefold repetition or the ply limit; game_over_message says which.
+            log_message(f"\n{gamestate.game_over_message}")
+            return {
+                'result': 'draw',
+                'winner': None,
+                'moves': move_count - 1,
+                'duration': time.time() - game_start,
+                'avg_move_time': sum(move_times) / len(move_times) if move_times else 0
+            }
         
         # Check the move limit
         if move_count > max_moves:
@@ -438,6 +450,7 @@ def run_self_play_training(num_games: int = None, depth: int = 5, exploration_ra
         'total_games': 0,
         'checkmate': 0,
         'stalemate': 0,
+        'draw': 0,
         'max_moves': 0,
         'interrupted': 0,
         'errors': 0,
@@ -487,6 +500,7 @@ def run_self_play_training(num_games: int = None, depth: int = 5, exploration_ra
             log_message(f"    - White wins: {stats['white_wins']}")
             log_message(f"    - Black wins: {stats['black_wins']}")
             log_message(f"  Stalemate: {stats['stalemate']} ({stats['stalemate']/stats['total_games']*100:.1f}%)")
+            log_message(f"  Draw (repetition / ply limit): {stats['draw']} ({stats['draw']/stats['total_games']*100:.1f}%)")
             log_message(f"  Move limit: {stats['max_moves']}")
             log_message(f"  Average moves per game: {stats['total_moves']/stats['total_games']:.1f}")
             log_message(f"  Average game time: {stats['total_time']/stats['total_games']:.1f}s")
@@ -521,6 +535,7 @@ def run_self_play_training(num_games: int = None, depth: int = 5, exploration_ra
             log_message(f"    - White wins: {stats['white_wins']}")
             log_message(f"    - Black wins: {stats['black_wins']}")
             log_message(f"  Stalemate: {stats['stalemate']} ({stats['stalemate']/stats['total_games']*100:.1f}%)")
+            log_message(f"  Draw (repetition / ply limit): {stats['draw']} ({stats['draw']/stats['total_games']*100:.1f}%)")
             log_message(f"  Move limit: {stats['max_moves']}")
             log_message(f"  Errors: {stats['errors']}")
             log_message(f"  Interrupted: {stats['interrupted']}")

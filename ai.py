@@ -55,6 +55,34 @@ def _sync_to_rust(gamestate):
 
 # --- Core AI Functions ---
 
+def _normalize_promotion(move, color):
+    """Case a promotion piece char to match the side that is moving.
+
+    The Rust generator emits promotion pieces uppercase for both colours, while
+    gamestate.py validates against PROMOTION_PIECES_WHITE_STR / _BLACK_STR, which
+    are case-sensitive: 'R' for White, 'r' for Black. Feeding Rust's 'R' into a
+    Black promotion makes make_move print "Invalid promotion choice" and return
+    False, leaving the board untouched -- the GUI then falls back to a random
+    move (main.py) and self-play aborts the game (src/self_play.py:215).
+
+    Every engine move re-enters Python through this module, so this is the single
+    place to reconcile the two conventions. Idempotent, and a no-op for drops.
+    """
+    if not move or len(move) != 3 or move[0] == 'drop' or not move[2]:
+        return move
+    start, end, promotion = move
+    return (start, end, promotion.upper() if color == 'w' else promotion.lower())
+
+
+def _normalize_result(result, color):
+    """Apply _normalize_promotion across either shape find_best_move returns."""
+    if result is None:
+        return None
+    if isinstance(result, list):
+        return [(_normalize_promotion(m, color), score) for m, score in result]
+    return _normalize_promotion(result, color)
+
+
 def get_position_hash(gamestate):
     """Compute Zobrist hash for the position (via Rust)."""
     rs = _sync_to_rust(gamestate)
@@ -132,7 +160,7 @@ def find_best_move(gamestate, depth=6, return_top_n=1, time_limit=None, parallel
     elapsed = time.time() - start_time
     print(f"AI ({gamestate.current_turn}) finished in {elapsed:.2f}s.")
 
-    return result
+    return _normalize_result(result, gamestate.current_turn)
 
 
 # --- Compatibility functions used by tests and other modules ---
@@ -149,7 +177,7 @@ def minimax_alpha_beta(gamestate, depth, alpha, beta, maximizing_player, allow_n
         return (score, None)
     # find_best_move returns just the move tuple when return_top_n=1
     # We need (score, move) - run eval on the resulting position for score
-    return (0, result)
+    return (0, _normalize_promotion(result, gamestate.current_turn))
 
 
 def parse_move_string(move_str):
