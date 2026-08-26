@@ -48,7 +48,8 @@ def choose_move_with_exploration(gamestate: GameState, depth: int, exploration_r
         The chosen move
     """
     # Get the top 2 moves
-    top_moves = ai.find_best_move(gamestate, depth=depth, return_top_n=2)
+    # parallel=False: training is parallelised across games, not inside one search.
+    top_moves = ai.find_best_move(gamestate, depth=depth, return_top_n=2, parallel=False)
     
     if not top_moves:
         print("No moves available!")
@@ -211,8 +212,13 @@ def run_self_play_training(num_games: int = None, depth: int = 6, exploration_ra
     print(f"  - Search depth: {depth}")
     print(f"  - Exploration probability: {exploration_rate*100:.0f}%")
     print(f"  - Number of games: {'∞' if num_games is None else num_games}")
+    print(f"  - Search threads: 1 (single-threaded; run several games in parallel instead)")
     print(f"\nPress Ctrl+C to stop")
     print("="*60)
+
+    # Training deliberately runs a single-threaded search: many independent games across
+    # cores scale better than parallelising one game.
+    ai.set_parallel_search(False)
     
     # Load the cache from the DB
     print("\nLoading the move cache from the database...")

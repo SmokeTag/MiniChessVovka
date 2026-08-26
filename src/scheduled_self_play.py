@@ -169,7 +169,8 @@ def choose_move_with_exploration(gamestate: GameState, depth: int, exploration_r
     move_calc_start = time.time()
     
     # Get the top 2 moves
-    top_moves = ai.find_best_move(gamestate, depth=depth, return_top_n=2)
+    # parallel=False: training is parallelised across games, not inside one search.
+    top_moves = ai.find_best_move(gamestate, depth=depth, return_top_n=2, parallel=False)
     
     if not top_moves:
         log_message("No moves available!")
@@ -420,8 +421,13 @@ def run_self_play_training(num_games: int = None, depth: int = 5, exploration_ra
     log_message(f"  - Number of games: {'∞' if num_games is None else num_games}")
     log_message(f"  - Log file: {LOG_FILE}")
     log_message(f"  - Progress file: {PROGRESS_FILE}")
+    log_message(f"  - Search threads: 1 (single-threaded; run several games in parallel instead)")
     log_message(f"\nPress Ctrl+C or send SIGTERM to stop")
     log_message("="*60)
+
+    # Training deliberately runs a single-threaded search: many independent games across
+    # cores scale better than parallelising one game.
+    ai.set_parallel_search(False)
     
     # Load the cache from the DB
     log_message("\nLoading the move cache from the database...")
