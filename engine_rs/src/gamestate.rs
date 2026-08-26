@@ -1,6 +1,9 @@
 use crate::types::*;
 use crate::zobrist;
 
+/// Default draw-by-move-limit threshold, in plies. Overridable per GameState.
+pub const DEFAULT_PLY_LIMIT: u32 = 200;
+
 /// Undo information for fast make/undo during search
 #[derive(Clone)]
 pub struct UndoInfo {
@@ -29,12 +32,29 @@ pub struct GameState {
     pub promoted_pieces: u64, // bitset: bit i = square i has a promoted piece
     pub hash: u64,
 
+    // ---- Draw detection (real-game path only; the alpha-beta search never
+    // touches these — make_ai_move/undo_ai_move deliberately leave them alone) ----
+    /// Hash of every position that has *occurred* in the game, including the
+    /// initial position. Pushed by make_move/complete_promotion, popped by undo_move.
+    pub position_history: Vec<u64>,
+    /// Number of completed plies.
+    pub ply: u32,
+    /// Draw is declared once `ply` reaches this. Configurable per game.
+    pub ply_limit: u32,
+    /// Set when the game ended in a draw (repetition or ply limit). Deliberately
+    /// distinct from `stalemate`, which search/eval treat specially.
+    pub is_draw: bool,
+
     // UI-related fields (not used in search, but needed for Python compat)
     pub needs_promotion_choice: bool,
     pub promotion_square: Option<usize>,
 
     // Search stack
     pub ai_history: Vec<UndoInfo>,
+
+    /// Undo info for a move that is waiting on a promotion choice. Completed and
+    /// pushed onto `ai_history` by `complete_promotion`.
+    pending_undo: Option<UndoInfo>,
 
     // Cached legal moves
     legal_moves_cache: Option<Vec<Move>>,
@@ -53,9 +73,14 @@ impl GameState {
             game_over_message: String::new(),
             promoted_pieces: 0,
             hash: 0,
+            position_history: Vec::new(),
+            ply: 0,
+            ply_limit: DEFAULT_PLY_LIMIT,
+            is_draw: false,
             needs_promotion_choice: false,
             promotion_square: None,
             ai_history: Vec::with_capacity(128),
+            pending_undo: None,
             legal_moves_cache: None,
         }
     }
@@ -89,8 +114,29 @@ impl GameState {
         self.needs_promotion_choice = false;
         self.promotion_square = None;
         self.ai_history.clear();
+        self.pending_undo = None;
         self.legal_moves_cache = None;
         self.hash = self.compute_hash();
+
+        self.is_draw = false;
+        self.ply = 0;
+        self.ply_limit = DEFAULT_PLY_LIMIT;
+        self.position_history.clear();
+        self.position_history.push(self.hash);
+    }
+
+    /// How many times the current position has occurred in this game (>= 1 once
+    /// the initial position has been recorded).
+    pub fn repetition_count(&self) -> usize {
+        let h = self.hash;
+        self.position_history.iter().filter(|&&x| x == h).count()
+    }
+
+    /// Record the position reached by a completed ply.
+    #[inline]
+    fn record_position(&mut self) {
+        self.ply += 1;
+        self.position_history.push(self.hash);
     }
 
     pub fn compute_hash(&self) -> u64 {
@@ -421,10 +467,25 @@ impl GameState {
                 self.stalemate = true;
                 self.game_over_message = "Stalemate! Draw.".to_string();
             }
+            self.is_draw = false;
             return true;
         }
         self.checkmate = false;
         self.stalemate = false;
+
+        // Draws. Reported distinctly from stalemate: `is_draw`, never `stalemate`.
+        if self.repetition_count() >= 3 {
+            self.is_draw = true;
+            self.game_over_message = "Draw by repetition.".to_string();
+            return true;
+        }
+        if self.ply >= self.ply_limit {
+            self.is_draw = true;
+            self.game_over_message = "Draw by move limit.".to_string();
+            return true;
+        }
+
+        self.is_draw = false;
         self.game_over_message.clear();
         false
     }
@@ -593,6 +654,20 @@ impl GameState {
             return false;
         }
 
+        let prev_hash = self.hash;
+        let mut undo = UndoInfo {
+            mov: m,
+            captured: Piece::Empty,
+            prev_king_pos: None,
+            prev_checkmate: self.checkmate,
+            prev_stalemate: self.stalemate,
+            prev_last_move: self.last_move,
+            was_promoted: false,
+            moved_promoted: false,
+            new_promotion: false,
+            prev_hash,
+        };
+
         if m.is_drop() {
             let to = m.to_sq();
             let pt = m.drop_piece_type();
@@ -619,6 +694,9 @@ impl GameState {
             self.last_move = m;
             self.current_turn = self.current_turn.opposite();
             self.hash = self.compute_hash();
+
+            self.ai_history.push(undo);
+            self.record_position();
 
             if check_game_over {
                 self.check_game_over();
@@ -648,11 +726,13 @@ impl GameState {
         self.board[from] = Piece::Empty;
 
         if is_capture {
+            undo.captured = target;
             let mut captured_type = target.piece_type().unwrap();
             if captured_type != PieceType::King {
                 if self.promoted_pieces & (1u64 << to) != 0 {
                     captured_type = PieceType::Pawn;
                     self.promoted_pieces &= !(1u64 << to);
+                    undo.was_promoted = true;
                 }
                 self.hands[color.index()][captured_type.index()] += 1;
             }
@@ -662,9 +742,11 @@ impl GameState {
         if self.promoted_pieces & (1u64 << from) != 0 {
             self.promoted_pieces &= !(1u64 << from);
             self.promoted_pieces |= 1u64 << to;
+            undo.moved_promoted = true;
         }
 
         if piece.piece_type() == Some(PieceType::King) {
+            undo.prev_king_pos = Some(self.king_pos[color.index()]);
             self.king_pos[color.index()] = to;
         }
 
@@ -675,15 +757,19 @@ impl GameState {
             if let Some(promo_pt) = m.promotion() {
                 self.board[to] = Piece::from_color_type(color, promo_pt);
                 self.promoted_pieces |= 1u64 << to;
+                undo.new_promotion = true;
                 self.needs_promotion_choice = false;
                 self.promotion_square = None;
             } else {
-                // Pawn reached promotion rank, waiting for choice
+                // Pawn reached promotion rank, waiting for choice. The ply is not
+                // complete yet, so nothing is recorded in the position history —
+                // complete_promotion records the finished position instead.
                 self.board[to] = piece;
                 self.needs_promotion_choice = true;
                 self.promotion_square = Some(to);
                 self.last_move = m;
                 self.hash = self.compute_hash();
+                self.pending_undo = Some(undo);
                 return true; // partial success
             }
         } else {
@@ -694,9 +780,37 @@ impl GameState {
         self.current_turn = self.current_turn.opposite();
         self.hash = self.compute_hash();
 
+        self.ai_history.push(undo);
+        self.record_position();
+
         if check_game_over {
             self.check_game_over();
         }
+        true
+    }
+
+    /// Full undo for the real-game path (GUI / bot / self-play). Reverses the last
+    /// `make_move` (or completed promotion) and rolls the position history back.
+    pub fn undo_move(&mut self) -> bool {
+        if self.needs_promotion_choice {
+            // Mid-promotion: the ply was never completed, so there is nothing
+            // consistent to roll back to. The caller must finish the promotion first.
+            return false;
+        }
+        if self.ai_history.is_empty() {
+            return false;
+        }
+        self.undo_ai_move();
+        if self.position_history.len() > 1 {
+            self.position_history.pop();
+        }
+        if self.ply > 0 {
+            self.ply -= 1;
+        }
+        self.pending_undo = None;
+        self.is_draw = false;
+        self.game_over_message.clear();
+        self.check_game_over();
         true
     }
 
@@ -719,6 +833,17 @@ impl GameState {
         self.current_turn = self.current_turn.opposite();
         self.legal_moves_cache = None;
         self.hash = self.compute_hash();
+
+        // The ply is only now complete: finish the undo record make_move stashed
+        // (rewriting the move so undo_ai_move knows to revert the piece to a pawn)
+        // and record the resulting position.
+        if let Some(mut undo) = self.pending_undo.take() {
+            undo.mov = Move::new_normal(undo.mov.from_sq(), to, Some(promo_pt));
+            undo.new_promotion = true;
+            self.ai_history.push(undo);
+        }
+        self.record_position();
+
         self.check_game_over();
         true
     }
@@ -735,9 +860,16 @@ impl GameState {
             game_over_message: String::new(),
             promoted_pieces: self.promoted_pieces,
             hash: self.hash,
+            // Inherited so a simulated continuation still sees repetitions that
+            // already happened in the real game.
+            position_history: self.position_history.clone(),
+            ply: self.ply,
+            ply_limit: self.ply_limit,
+            is_draw: self.is_draw,
             needs_promotion_choice: self.needs_promotion_choice,
             promotion_square: self.promotion_square,
             ai_history: Vec::new(),
+            pending_undo: self.pending_undo.clone(),
             legal_moves_cache: None,
         }
     }

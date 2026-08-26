@@ -39,7 +39,61 @@ class GameState:
         self._hash_cache = None # Cache for the position hash
         self.ai_history = [] # Stack for AI undo
         self.promoted_pieces = set()  # coords (r,c) of promoted pieces (ex-pawns)
+        # --- Draw detection state ---
+        self.is_draw = False          # True when the game ended in a draw (not stalemate)
+        self.ply_limit = 200          # Draw by move limit once this many plies are played
+        self.ply_count = 0            # Plies actually played in the real game
+        self.position_history = []    # Every position that OCCURRED, incl. the initial one
+        self.position_counts = {}     # position key -> number of occurrences (mirror of the list)
+        self._push_position()
 
+
+    # --- Draw detection helpers ---
+
+    def _position_key(self):
+        """Immutable identity of the current position for repetition detection.
+
+        Identity = (board, side to move, both hands, set of promoted squares).
+        Hand entries with a zero count are dropped so that an explicit ``'Q': 0``
+        key is indistinguishable from the piece simply being absent.
+        """
+        board_key = tuple(tuple(row) for row in self.board)
+        white_hand = tuple(sorted((p, c) for p, c in self.hands.get('w', {}).items() if c > 0))
+        black_hand = tuple(sorted((p, c) for p, c in self.hands.get('b', {}).items() if c > 0))
+        return (board_key, self.current_turn, white_hand, black_hand,
+                frozenset(self.promoted_pieces))
+
+    def _push_position(self):
+        """Records the current position as having occurred."""
+        key = self._position_key()
+        self.position_history.append(key)
+        self.position_counts[key] = self.position_counts.get(key, 0) + 1
+        return key
+
+    def _pop_position(self):
+        """Removes the most recently recorded position."""
+        if not self.position_history:
+            return None
+        key = self.position_history.pop()
+        remaining = self.position_counts.get(key, 0) - 1
+        if remaining > 0:
+            self.position_counts[key] = remaining
+        else:
+            self.position_counts.pop(key, None)
+        return key
+
+    def _truncate_position_history(self, length):
+        """Rewinds the position history to exactly `length` entries."""
+        while len(self.position_history) > length:
+            self._pop_position()
+
+    def _reset_position_history(self):
+        """Clears history/ply counter and records the current position as the first one."""
+        self.position_history = []
+        self.position_counts = {}
+        self.ply_count = 0
+        self.is_draw = False
+        self._push_position()
 
     def save_state(self):
         """Saves the current game state so a move can be undone."""
@@ -54,7 +108,12 @@ class GameState:
             'game_over_message': self.game_over_message,
             'needs_promotion_choice': self.needs_promotion_choice,
             'promotion_square': self.promotion_square,
-            'promoted_pieces': set(self.promoted_pieces)
+            'promoted_pieces': set(self.promoted_pieces),
+            'is_draw': self.is_draw,
+            'ply_count': self.ply_count,
+            # Only the LENGTH is stored: the history itself is rewound by popping,
+            # so snapshots stay O(1) instead of copying a growing list.
+            'history_len': len(self.position_history)
             # 'last_move_for_promotion' might be needed if undo happens during promotion choice
         }
         self.saved_states.append(state)
@@ -84,6 +143,9 @@ class GameState:
         self.needs_promotion_choice = prev_state['needs_promotion_choice']
         self.promotion_square = prev_state['promotion_square']
         self.promoted_pieces = set(prev_state.get('promoted_pieces', set()))
+        self.is_draw = prev_state.get('is_draw', False)
+        self.ply_count = prev_state.get('ply_count', self.ply_count)
+        self._truncate_position_history(prev_state.get('history_len', len(self.position_history)))
         # self.last_move_for_promotion = prev_state.get('last_move_for_promotion') # Restore if needed
 
         # Clear selections and highlights
@@ -143,6 +205,14 @@ class GameState:
         new_state.promoted_pieces = set(self.promoted_pieces)
         new_state._all_legal_moves_cache = None
 
+        # Draw state: copy() is a true fork of the game, so repetition history
+        # carries over (the keys themselves are immutable, a shallow list copy is enough).
+        new_state.is_draw = self.is_draw
+        new_state.ply_limit = self.ply_limit
+        new_state.ply_count = self.ply_count
+        new_state.position_history = list(self.position_history)
+        new_state.position_counts = dict(self.position_counts)
+
         return new_state
 
     def fast_copy_for_simulation(self):
@@ -168,8 +238,17 @@ class GameState:
         new_state.needs_promotion_choice = self.needs_promotion_choice
         new_state.promotion_square = self.promotion_square
         new_state.promoted_pieces = set(self.promoted_pieces)
-        
-        # NOT copied: saved_states, move_log, UI elements, caches
+
+        # Draw state: the ply counter and limit are cheap scalars and stay accurate,
+        # but the repetition history is deliberately NOT carried - this copy exists for
+        # throwaway simulation, and copying a long history would defeat its purpose.
+        # The simulated line therefore starts its repetition count from this position.
+        new_state.ply_limit = self.ply_limit
+        new_state._reset_position_history()  # resets ply_count/is_draw too
+        new_state.ply_count = self.ply_count
+        new_state.is_draw = self.is_draw
+
+        # NOT copied: saved_states, move_log, UI elements, caches, repetition history
         # This makes copying ~10-20x faster
         
         return new_state
@@ -216,6 +295,7 @@ class GameState:
         self.promotion_square = None
         self.last_move_for_promotion = None
         self._all_legal_moves_cache = None
+        self._reset_position_history() # Clear history/ply counter, record the initial position
         self.save_state() # Save the initial state
 
 
@@ -265,6 +345,9 @@ class GameState:
             self.selected_square = None # Clear selections
             self.selected_drop_piece = None
             self.highlighted_moves = []
+
+            self.ply_count += 1
+            self._push_position() # Record the position that just occurred
 
             if is_check_game_over:
                  self.check_game_over() # Check after opponent's turn starts
@@ -365,6 +448,9 @@ class GameState:
         self.selected_drop_piece = None
         self.highlighted_moves = []
 
+        self.ply_count += 1
+        self._push_position() # Record the position that just occurred
+
         if is_check_game_over:
             self.check_game_over() # Check after opponent's turn starts
 
@@ -431,6 +517,11 @@ class GameState:
         self.selected_drop_piece = None
         self.highlighted_moves = []
         self._all_legal_moves_cache = None # Invalidate cache
+
+        # The intermediate needs_promotion_choice state was never recorded; the
+        # position is only counted now that the promotion is resolved.
+        self.ply_count += 1
+        self._push_position()
 
         print(f"Promotion to {chosen_piece_char} completed. Turn: {self.current_turn}")
 
@@ -619,7 +710,7 @@ class GameState:
         return self._internal_is_square_attacked(king_pos[0], king_pos[1], get_opposite_color(color))
 
     def check_game_over(self):
-        """Checks and sets checkmate/stalemate flags."""
+        """Checks and sets checkmate/stalemate/draw flags."""
         if self.needs_promotion_choice: return False # Game not over yet
 
         # Check for the player WHOSE TURN IT IS NOW
@@ -639,9 +730,24 @@ class GameState:
                 print(self.game_over_message)
             return True # Game is over
 
+        # --- Draws (checked only if the side to move still has a move) ---
+        current_key = self.position_history[-1] if self.position_history else self._position_key()
+        if self.position_counts.get(current_key, 0) >= 3:
+            self.is_draw = True
+            self.game_over_message = "Draw by repetition."
+            print(self.game_over_message)
+            return True
+
+        if self.ply_count >= self.ply_limit:
+            self.is_draw = True
+            self.game_over_message = "Draw by move limit."
+            print(self.game_over_message)
+            return True
+
         # Game is not over
         self.checkmate = False
         self.stalemate = False
+        self.is_draw = False
         self.game_over_message = ""
         return False
 
