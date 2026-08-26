@@ -467,7 +467,7 @@ def draw_side_panel(screen, gamestate, show_hint=False, hint_move=None, board_fl
     _draw_button(screen, undo_rect, "Undo", HIGHLIGHT_COLORS['undo'])
     ui_elements['buttons']['undo_button'] = undo_rect
 
-    if gamestate.checkmate or gamestate.stalemate:
+    if gamestate.checkmate or gamestate.stalemate or gamestate.is_draw:
         ng_rect = pygame.Rect(px + btn_w + 8, y, btn_w, btn_h)
         _draw_button(screen, ng_rect, "New Game", (30, 130, 60))
         ui_elements['buttons']['new_game_button'] = ng_rect
@@ -531,6 +531,10 @@ def draw_side_panel(screen, gamestate, show_hint=False, hint_move=None, board_fl
         status_color = (255, 80, 80)
     elif gamestate.stalemate:
         status_text = "½ Stalemate — draw"
+        status_color = (220, 200, 80)
+    elif gamestate.is_draw:
+        # game_over_message distinguishes repetition from the ply limit
+        status_text = f"½ {gamestate.game_over_message.rstrip('.')}"
         status_color = (220, 200, 80)
     elif gamestate.needs_promotion_choice:
         player = "White" if gamestate.current_turn == 'w' else "Black"

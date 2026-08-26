@@ -86,7 +86,7 @@ def main():
         # Don't hint during AI turns or game-over
         is_current_ai = (gamestate.current_turn == 'w' and gamestate.white_ai_enabled) or \
                         (gamestate.current_turn == 'b' and gamestate.black_ai_enabled)
-        if is_current_ai or gamestate.checkmate or gamestate.stalemate:
+        if is_current_ai or gamestate.checkmate or gamestate.stalemate or gamestate.is_draw:
             hint_move = None
             return
         try:
@@ -221,7 +221,7 @@ def main():
             nonlocal making_ai_move, ai_thread, hint_move, hint_position_hash
             hint_move = None
             hint_position_hash = None
-            if not (gamestate.checkmate or gamestate.stalemate):
+            if not (gamestate.checkmate or gamestate.stalemate or gamestate.is_draw):
                  is_next_player_ai = (gamestate.current_turn == 'w' and gamestate.white_ai_enabled) or \
                                      (gamestate.current_turn == 'b' and gamestate.black_ai_enabled)
                  if is_next_player_ai:
@@ -413,7 +413,7 @@ def main():
         is_current_player_ai = (gamestate.current_turn == 'w' and gamestate.white_ai_enabled) or \
                                (gamestate.current_turn == 'b' and gamestate.black_ai_enabled)
         if is_current_player_ai and not making_ai_move and not gamestate.needs_promotion_choice \
-           and not gamestate.checkmate and not gamestate.stalemate:
+           and not gamestate.checkmate and not gamestate.stalemate and not gamestate.is_draw:
              print(f"AI's turn ({gamestate.current_turn}). Starting calculation.")
              making_ai_move = True
              ai_thread = AIThread(gamestate, gamestate.ai_depth)

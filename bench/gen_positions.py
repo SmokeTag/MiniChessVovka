@@ -77,7 +77,7 @@ def describe(gs):
         "hands": {c: {k: v for k, v in h.items() if v} for c, h in gs.hands.items()},
         "in_check": gs.is_in_check(gs.current_turn),
         "legal_moves": len(gs.get_all_legal_moves()),
-        "game_over": bool(gs.checkmate or gs.stalemate),
+        "game_over": bool(gs.checkmate or gs.stalemate or gs.is_draw),
     }
 
 
@@ -109,7 +109,7 @@ def walk(deviations, max_ply):
     snapshots = [([], describe(gs))]
     for ply in range(max_ply):
         legal = gs.get_all_legal_moves()
-        if not legal or gs.checkmate or gs.stalemate:
+        if not legal or gs.checkmate or gs.stalemate or gs.is_draw:
             break
         if ply in deviations:
             move = legal[deviations[ply] % len(legal)]

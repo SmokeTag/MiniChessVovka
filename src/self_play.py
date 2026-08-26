@@ -181,6 +181,17 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
                 'duration': time.time() - game_start,
                 'avg_move_time': sum(move_times) / len(move_times) if move_times else 0
             }
+
+        if gamestate.is_draw:
+            # Threefold repetition or the ply limit; game_over_message says which.
+            print(f"\n{gamestate.game_over_message}")
+            return {
+                'result': 'draw',
+                'winner': None,
+                'moves': move_count - 1,
+                'duration': time.time() - game_start,
+                'avg_move_time': sum(move_times) / len(move_times) if move_times else 0
+            }
         
         # Check the move limit
         if move_count > max_moves:
@@ -278,6 +289,7 @@ def run_self_play_training(num_games: int = None, depth: int = 6, exploration_ra
         'total_games': 0,
         'checkmate': 0,
         'stalemate': 0,
+        'draw': 0,
         'max_moves': 0,
         'interrupted': 0,
         'errors': 0,
@@ -330,6 +342,7 @@ def run_self_play_training(num_games: int = None, depth: int = 6, exploration_ra
             print(f"    - White wins: {stats['white_wins']}")
             print(f"    - Black wins: {stats['black_wins']}")
             print(f"  Stalemate: {stats['stalemate']} ({stats['stalemate']/stats['total_games']*100:.1f}%)")
+            print(f"  Draw (repetition / ply limit): {stats['draw']} ({stats['draw']/stats['total_games']*100:.1f}%)")
             print(f"  Move limit: {stats['max_moves']}")
             print(f"  Average moves per game: {stats['total_moves']/stats['total_games']:.1f}")
             print(f"  Average game time: {stats['total_time']/stats['total_games']:.1f}s")
@@ -361,6 +374,7 @@ def run_self_play_training(num_games: int = None, depth: int = 6, exploration_ra
             print(f"    - White wins: {stats['white_wins']}")
             print(f"    - Black wins: {stats['black_wins']}")
             print(f"  Stalemate: {stats['stalemate']} ({stats['stalemate']/stats['total_games']*100:.1f}%)")
+            print(f"  Draw (repetition / ply limit): {stats['draw']} ({stats['draw']/stats['total_games']*100:.1f}%)")
             print(f"  Move limit: {stats['max_moves']}")
             print(f"  Errors: {stats['errors']}")
             print(f"  Interrupted: {stats['interrupted']}")
