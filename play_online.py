@@ -25,6 +25,7 @@ import sys
 import time
 import sqlite3
 import hashlib
+import ast
 import copy
 from datetime import datetime
 from pathlib import Path
@@ -1172,7 +1173,7 @@ def get_ai_move(gamestate, our_color, our_move_history=None, time_remaining=None
     cached = ai_module.move_cache.get(cache_key)
     if cached:
         try:
-            best_move = eval(cached)
+            best_move = ast.literal_eval(cached)
             if best_move in legal_moves:
                 if _would_cycle(best_move):
                     print(f"   🔄 CACHE HIT depth {search_depth}: {format_move_for_print(best_move)} — SKIPPED (cycle)")
