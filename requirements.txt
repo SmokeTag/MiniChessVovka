@@ -1,8 +1,6 @@
-numpy>=1.21
-torch>=2.0
-flask>=2.0
-typer>=0.7
 pygame>=2.1
+pytest>=7.0
+
+# Chess.com bot only (play_online.py)
 python-dotenv>=0.19.0
 playwright>=1.40.0
-pytest>=7.0
