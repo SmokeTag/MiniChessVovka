@@ -8,6 +8,7 @@ venv/
 # Database (runtime)
 move_cache.db
 move_cache.db.*
+move_cache.db-*
 
 # Training
 training_log.txt
@@ -62,3 +63,10 @@ win_of_*.jpg
 
 # Pytest
 .pytest_cache/
+
+# Parallel self-play runtime
+logs/
+training_workers.pid
+
+# Claude Code worktrees (2 GB of throwaway build trees)
+.claude/worktrees/

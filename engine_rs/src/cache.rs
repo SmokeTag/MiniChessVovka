@@ -3,8 +3,21 @@ use std::collections::HashMap;
 
 const DB_PATH: &str = "move_cache.db";
 
-pub fn setup_db() -> Result<(), rusqlite::Error> {
+/// Opens the cache DB in WAL mode with a generous busy timeout.
+///
+/// Both matter when many self-play workers share one `move_cache.db`: WAL keeps
+/// readers off the writer's back, and the timeout makes a concurrent writer wait
+/// its turn instead of failing the transaction outright.
+fn open_db() -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open(DB_PATH)?;
+    let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+    conn.busy_timeout(std::time::Duration::from_secs(30))?;
+    Ok(conn)
+}
+
+pub fn setup_db() -> Result<(), rusqlite::Error> {
+    let conn = open_db()?;
     
     // Check if table exists and has correct schema
     let has_depth: bool = {
@@ -43,7 +56,7 @@ pub fn load_move_cache() -> HashMap<(String, i32), String> {
         return cache;
     }
     
-    match Connection::open(DB_PATH) {
+    match open_db() {
         Ok(conn) => {
             match conn.prepare("SELECT hash, depth, best_move_repr FROM move_cache") {
                 Ok(mut stmt) => {
@@ -74,7 +87,7 @@ pub fn save_move_cache(cache: &HashMap<(String, i32), String>) {
         return;
     }
     
-    match Connection::open(DB_PATH) {
+    match open_db() {
         Ok(conn) => {
             let tx = conn.unchecked_transaction().ok();
             let mut count = 0;
@@ -90,6 +103,39 @@ pub fn save_move_cache(cache: &HashMap<(String, i32), String>) {
                 let _ = tx.commit();
             }
             eprintln!("Saved {} entries to move cache.", count);
+        }
+        Err(e) => eprintln!("Error saving cache: {}", e),
+    }
+}
+
+/// Writes only the given keys back to the DB.
+///
+/// `save_move_cache` rewrites every entry the process holds, which is O(cache)
+/// per call — fine for one process, ruinous once twenty self-play workers each
+/// re-send a six-figure cache after every move. Callers that track which keys
+/// they touched should use this instead.
+pub fn save_move_cache_entries(cache: &HashMap<(String, i32), String>, keys: &[(String, i32)]) {
+    if keys.is_empty() {
+        return;
+    }
+
+    match open_db() {
+        Ok(conn) => {
+            let tx = conn.unchecked_transaction().ok();
+            let mut count = 0;
+            for key in keys {
+                let Some(move_repr) = cache.get(key) else { continue };
+                if conn.execute(
+                    "INSERT OR REPLACE INTO move_cache (hash, depth, best_move_repr) VALUES (?1, ?2, ?3)",
+                    params![key.0, key.1, move_repr],
+                ).is_ok() {
+                    count += 1;
+                }
+            }
+            if let Some(tx) = tx {
+                let _ = tx.commit();
+            }
+            eprintln!("Saved {} new entries to move cache.", count);
         }
         Err(e) => eprintln!("Error saving cache: {}", e),
     }

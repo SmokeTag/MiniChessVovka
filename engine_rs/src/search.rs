@@ -10,6 +10,18 @@ use crate::zobrist;
 
 const MAX_QUIESCENCE_DEPTH: i32 = 4;
 
+/// Deepest entry the persistent move cache is known to hold, which is where `probe_move_cache`
+/// starts its walk. Set from the DB when it is loaded and raised by every insert, so a run at
+/// depth 12 or 16 widens the probe by itself — no constant to keep in sync. 0 means nothing is
+/// cached yet, which makes the probe a no-op.
+static MAX_CACHED_DEPTH: AtomicI32 = AtomicI32::new(0);
+
+/// Record that the cache now holds an entry at `depth`. Callers that fill `move_cache` from
+/// outside a search (the DB load) must call this, or the probe will not look that deep.
+pub fn note_cached_depth(depth: i32) {
+    MAX_CACHED_DEPTH.fetch_max(depth, Ordering::Relaxed);
+}
+
 // Root-level parallel search is a runtime knob, not a compile-time constant.
 // Default is OFF: self-play training runs many independent games side by side across
 // cores, which scales better than parallelising a single game. Interactive analysis
@@ -587,8 +599,17 @@ struct RootHeuristics {
 }
 
 /// Searches one root move in its own SearchState, on its own copy of the board.
-/// Returns `(move, score, tt_entries, aborted)`. When `aborted` is true the score and
-/// the transposition entries come from truncated subtrees and must not be trusted.
+/// Returns `(move, score, aborted)`. When `aborted` is true the score comes from
+/// truncated subtrees and must not be trusted.
+///
+/// The worker's own table dies with the worker, and that is deliberate. Ordinary bound
+/// entries would be safe to share, but this engine's null-move pruning returns a hard
+/// `beta` (see the null-move cutoff below), and the store site classifies flags by
+/// comparing the result against the *original* alpha/beta -- so under the razor-thin
+/// window a scout is given, a window-clamped value can be written with flag `Exact`.
+/// Fed back to the root, a later full-window probe returns that value verbatim and the
+/// search answers differently than the sequential one does. Measured: opening_start at
+/// depth 7 returned d1c2 scored 24 where the sequential search returns c1e2 scored 74.
 fn search_worker(
     gs: &GameState,
     m: Move,
@@ -599,7 +620,7 @@ fn search_worker(
     base_tt: &SharedTT,
     heuristics: &RootHeuristics,
     deadline: Option<Instant>,
-) -> (Move, i32, HashMap<u64, TTEntry>, bool) {
+) -> (Move, i32, bool) {
     let mut gs_copy = gs.fast_copy();
     let mut ss = SearchState::with_tt_capacity(1 << 14);
     ss.base_tt = Some(Arc::clone(base_tt));
@@ -614,30 +635,8 @@ fn search_worker(
     // cannot drift apart in what they score or how they prune.
     let (score, _) = minimax_ab(&mut gs_copy, depth - 1, alpha, beta, !maximizing, true, &mut ss);
 
-    // An aborted worker returns a score built on cut-off subtrees, and every TT entry it
-    // wrote below the abort point is just as suspect. Hand back nothing but the stop flag.
-    if ss.stopped {
-        return (m, score, HashMap::new(), true);
-    }
-
-    // Collect valuable TT entries
-    let min_depth = (depth - 3).max(1);
-    let valuable: HashMap<u64, TTEntry> = ss.tt.into_iter()
-        .filter(|(_, e)| e.depth >= min_depth && !e.best_move.is_null())
-        .collect();
-
-    (m, score, valuable, false)
-}
-
-/// Fold a worker's harvested transposition entries into the root table, keeping the
-/// deeper of the two whenever both searched the same position.
-fn merge_worker_tt(ss: &mut SearchState, worker_tt: &HashMap<u64, TTEntry>) {
-    for (h, e) in worker_tt {
-        let deeper = ss.tt.get(h).map_or(true, |ex| e.depth > ex.depth);
-        if deeper {
-            ss.tt.insert(*h, e.clone());
-        }
-    }
+    // An aborted worker returns a score built on cut-off subtrees.
+    (m, score, ss.stopped)
 }
 
 // Parallel minimax at root level.
@@ -721,7 +720,7 @@ fn minimax_parallel(
     };
 
     let scout_start = Instant::now();
-    let scouted: Vec<(Move, i32, HashMap<u64, TTEntry>, bool)> = {
+    let scouted: Vec<(Move, i32, bool)> = {
         use rayon::prelude::*;
         remaining.par_iter().map(|&m| {
             search_worker(&gs_snapshot, m, depth, scout_alpha, scout_beta, maximizing, &base_tt, &heuristics, deadline)
@@ -730,13 +729,12 @@ fn minimax_parallel(
     let scout_secs = scout_start.elapsed().as_secs_f64();
 
     let mut candidates: Vec<(Move, i32)> = Vec::new();
-    for (m, score, worker_tt, worker_stopped) in scouted {
+    for (m, score, worker_stopped) in scouted {
         if worker_stopped {
             // Some root moves were never scored, so the best of the rest is not the best.
             ss.stopped = true;
             return (Move::NULL, 0, vec![]);
         }
-        merge_worker_tt(ss, &worker_tt);
 
         let beats_baseline = if maximizing { score > scout_alpha } else { score < scout_beta };
         if beats_baseline {
@@ -746,9 +744,14 @@ fn minimax_parallel(
         }
     }
 
-    // Re-search at full width only the moves that beat the baseline, best scout first so
-    // alpha climbs early and the rest get cut off quickly. These run in the root's state
-    // too, so the score reported for the winner is a full-TT, full-window score.
+    // Re-search the moves that beat the baseline at full width -- in parallel, for the
+    // same reason the scout is parallel. Serially this loop raises alpha as it goes, which
+    // prunes a little harder but makes the wall time the SUM of the re-searches; on the
+    // bench that sum was routinely larger than the whole scout phase it followed (5 moves
+    // costing 0.41s against 45 scouts costing 0.29s). Fixing alpha at the baseline instead
+    // makes the wall time the MAX, costs only the pruning a climbing alpha would have
+    // bought, and drops the last scheduling-dependent step: results are folded in root-move
+    // order with a strict comparison, so the best-ordered move still wins any tie.
     if maximizing {
         candidates.sort_unstable_by(|a, b| b.1.cmp(&a.1));
     } else {
@@ -756,20 +759,34 @@ fn minimax_parallel(
     }
     let n_candidates = candidates.len();
     let research_start = Instant::now();
-    for (m, _) in candidates {
-        let (window_alpha, window_beta) = if maximizing {
-            (best_score, inf)
-        } else {
-            (neg_inf, best_score)
-        };
-        gs.make_ai_move(m);
-        let (score, _) = minimax_ab(gs, depth - 1, window_alpha, window_beta, !maximizing, true, ss);
-        gs.undo_ai_move();
-        if ss.stopped {
+    let (window_alpha, window_beta) = if maximizing { (best_score, inf) } else { (neg_inf, best_score) };
+    let researched: Vec<(Move, i32, bool)> = if n_candidates > 1 {
+        use rayon::prelude::*;
+        candidates
+            .par_iter()
+            .map(|&(m, _)| {
+                search_worker(&gs_snapshot, m, depth, window_alpha, window_beta, maximizing, &base_tt, &heuristics, deadline)
+            })
+            .collect()
+    } else {
+        // A single candidate has nothing to run beside it, so keep it in the root's state
+        // where it sees the whole transposition table rather than the filtered snapshot.
+        candidates
+            .iter()
+            .map(|&(m, _)| {
+                gs.make_ai_move(m);
+                let (score, _) = minimax_ab(gs, depth - 1, window_alpha, window_beta, !maximizing, true, ss);
+                gs.undo_ai_move();
+                (m, score, ss.stopped)
+            })
+            .collect()
+    };
+
+    for (m, score, stopped) in researched {
+        if stopped {
             return (Move::NULL, 0, vec![]);
         }
         all_results.push((m, score));
-
         if (maximizing && score > best_score) || (!maximizing && score < best_score) {
             best_score = score;
             best_move = m;
@@ -792,11 +809,61 @@ fn minimax_parallel(
     (best_move, best_score, all_results)
 }
 
+/// The one way to write the persistent cache. An entry that misses `dirty` never reaches the
+/// DB; one that misses `note_cached_depth` is invisible to `probe_move_cache`. Going through
+/// here keeps both true.
+fn cache_store(
+    move_cache: &mut HashMap<(String, i32), String>,
+    dirty: &mut Vec<(String, i32)>,
+    pos_hash_str: &str,
+    depth: i32,
+    m: Move,
+) {
+    let key = (pos_hash_str.to_string(), depth);
+    move_cache.insert(key.clone(), format_move_repr(m));
+    dirty.push(key);
+    note_cached_depth(depth);
+}
+
+/// Deepest usable persistent-cache entry for `pos_hash_str`, at or above `min_depth`.
+///
+/// The cache is keyed by `(hash, depth)`, so finding "any entry at least this deep" means
+/// walking the depths rather than the map — walking the map is O(cache), which is six figures
+/// per search once a worker has been running a while. The walk starts at `MAX_CACHED_DEPTH`,
+/// so it costs nothing beyond the depths that actually exist. Deeper entries win: they came
+/// from a search that saw strictly more. A row whose move is not legal in this position is a
+/// hash collision (or a stale schema) and is skipped rather than trusted.
+fn probe_move_cache(
+    gs: &mut GameState,
+    move_cache: &HashMap<(String, i32), String>,
+    pos_hash_str: &str,
+    min_depth: i32,
+) -> Option<(Move, i32)> {
+    let max_depth = MAX_CACHED_DEPTH.load(Ordering::Relaxed);
+    if min_depth > max_depth {
+        return None;
+    }
+    let mut legal: Option<Vec<Move>> = None;
+    for d in (min_depth..=max_depth).rev() {
+        let Some(cached_repr) = move_cache.get(&(pos_hash_str.to_string(), d)) else { continue };
+        let Some(m) = parse_move_repr(cached_repr) else { continue };
+        // Only pay for move generation once we actually have a candidate to validate.
+        let legal = legal.get_or_insert_with(|| gs.get_legal_moves_vec());
+        if legal.contains(&m) {
+            return Some((m, d));
+        }
+    }
+    None
+}
+
 /// Main entry: iterative deepening + cache
+/// `dirty` collects every cache key this call inserted, so the caller can persist
+/// just those instead of rewriting the whole cache.
 pub fn find_best_move(
     gs: &mut GameState,
     depth: i32,
     move_cache: &mut HashMap<(String, i32), String>,
+    dirty: &mut Vec<(String, i32)>,
     time_limit: Option<f64>,
     parallel: Option<bool>,
 ) -> (Move, i32) {
@@ -804,16 +871,16 @@ pub fn find_best_move(
     let maximizing = gs.current_turn == Color::White;
     let pos_hash_str = gs.hash.to_string();
 
-    // Check cache
-    let cache_key = (pos_hash_str.clone(), depth);
-    if let Some(cached_repr) = move_cache.get(&cache_key) {
-        if let Some(m) = parse_move_repr(cached_repr) {
-            let legal = gs.get_legal_moves_vec();
-            if legal.contains(&m) {
-                eprintln!("[CACHE HIT] depth {} in {:.2}s", depth, start.elapsed().as_secs_f64());
-                return (m, 0);
-            }
-        }
+    // Check cache. An entry searched deeper than we were asked for answers the same
+    // question with more evidence behind it, so probe from the deepest stored depth
+    // down to the requested one and take the first legal hit. Never below `depth`:
+    // a shallower row is a weaker answer than the search we are about to run.
+    if let Some((m, hit_depth)) = probe_move_cache(gs, move_cache, &pos_hash_str, depth) {
+        eprintln!(
+            "[CACHE HIT] depth {} (requested {}) in {:.2}s",
+            hit_depth, depth, start.elapsed().as_secs_f64()
+        );
+        return (m, 0);
     }
 
     let legal = gs.get_legal_moves_vec();
@@ -822,7 +889,7 @@ pub fn find_best_move(
     }
     if legal.len() == 1 {
         let m = legal[0];
-        move_cache.insert((pos_hash_str.clone(), depth), format_move_repr(m));
+        cache_store(move_cache, dirty, &pos_hash_str, depth, m);
         return (m, 0);
     }
 
@@ -835,16 +902,38 @@ pub fn find_best_move(
     let (global_parallel, parallel_min_depth) = parallel_search_config();
     let use_parallel = parallel.unwrap_or(global_parallel);
     // i32::MAX keeps the parallel branch unreachable when parallel search is off.
-    let parallel_threshold = if use_parallel { parallel_min_depth } else { i32::MAX };
+    // Only the last iteration is worth splitting: the shallow ones cost more in fan-out
+    // than they save, and nothing downstream consumes their result any more now that the
+    // workers' tables are discarded instead of merged into the root table. Measured on the
+    // bench suite, splitting every iteration from depth 3 up left depth 7 at 1.02x while
+    // splitting only the last gave 2.07x on the same positions.
+    let parallel_threshold = if use_parallel { parallel_min_depth.max(depth) } else { i32::MAX };
     if use_parallel {
         eprintln!("  [PARALLEL] root split enabled from depth {}", parallel_threshold);
     }
+
+    // Splitting a cheap iteration loses: the fan-out clones a heuristic set and a table
+    // snapshot per worker, which costs more than the search it replaces. Gate on what the
+    // previous iteration actually cost rather than on core count or move count -- it is the
+    // one predictor already measured on the machine the search is running on. (A core-count
+    // guard was tried and rejected: it scales the wrong way, disabling the split entirely on
+    // a 64-thread box.)
+    const MIN_SPLIT_SECS: f64 = 0.03;
+    let mut last_iter_secs = 0.0f64;
 
     for current_depth in 1..=depth {
         eprintln!("  [ID] depth {}...", current_depth);
         let iter_start = Instant::now();
 
-        if current_depth < parallel_threshold {
+        let too_cheap_to_split = last_iter_secs < MIN_SPLIT_SECS;
+        if current_depth >= parallel_threshold && too_cheap_to_split {
+            eprintln!(
+                "  [PARALLEL] depth {} not split: previous iteration took {:.3}s < {:.2}s",
+                current_depth, last_iter_secs, MIN_SPLIT_SECS
+            );
+        }
+
+        if current_depth < parallel_threshold || too_cheap_to_split {
             let (score, m) = minimax_ab(gs, current_depth, i32::MIN + 1, i32::MAX - 1, maximizing, true, &mut ss);
             // If stopped mid-search, only use result if we have a previous best
             if ss.stopped {
@@ -859,7 +948,7 @@ pub fn find_best_move(
             if !m.is_null() {
                 best_move = m;
                 best_score = score;
-                move_cache.insert((pos_hash_str.clone(), current_depth), format_move_repr(m));
+                cache_store(move_cache, dirty, &pos_hash_str, current_depth, m);
             }
         } else {
             let (m, score, _) = minimax_parallel(gs, current_depth, &mut ss);
@@ -876,11 +965,12 @@ pub fn find_best_move(
             if !m.is_null() {
                 best_move = m;
                 best_score = score;
-                move_cache.insert((pos_hash_str.clone(), current_depth), format_move_repr(m));
+                cache_store(move_cache, dirty, &pos_hash_str, current_depth, m);
             }
         }
 
         let elapsed = iter_start.elapsed().as_secs_f64();
+        last_iter_secs = elapsed;
         eprintln!("  [ID] depth {} done in {:.2}s, score={}", current_depth, elapsed, best_score);
 
         if best_score.abs() >= CHECKMATE_SCORE * 9 / 10 {
@@ -898,15 +988,16 @@ pub fn find_best_move(
 
     // Store best
     if !best_move.is_null() {
-        move_cache.insert((pos_hash_str.clone(), depth), format_move_repr(best_move));
+        cache_store(move_cache, dirty, &pos_hash_str, depth, best_move);
 
         // Persist TT entries to cache
         let mut tt_saved = 0;
         for (h, e) in &ss.tt {
             if e.depth >= 4 && e.flag == TTFlag::Exact && !e.best_move.is_null() {
-                let key = (h.to_string(), e.depth);
+                let h_str = h.to_string();
+                let key = (h_str.clone(), e.depth);
                 if !move_cache.contains_key(&key) {
-                    move_cache.insert(key, format_move_repr(e.best_move));
+                    cache_store(move_cache, dirty, &h_str, e.depth, e.best_move);
                     tt_saved += 1;
                 }
             }

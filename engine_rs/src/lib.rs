@@ -18,6 +18,9 @@ use gamestate::GameState as RustGameState;
 // Global move cache (thread-safe)
 lazy_static::lazy_static! {
     static ref MOVE_CACHE: Mutex<HashMap<(String, i32), String>> = Mutex::new(HashMap::new());
+    /// Cache keys written since the last save. Lets save_move_cache_to_db push only
+    /// the new entries instead of the whole cache — see cache::save_move_cache_entries.
+    static ref DIRTY_KEYS: Mutex<Vec<(String, i32)>> = Mutex::new(Vec::new());
 }
 
 /// Convert a Python move tuple to our internal Move
@@ -523,7 +526,10 @@ fn find_best_move(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, retu
     
     let (best, score) = py.allow_threads(|| {
         let mut cache = MOVE_CACHE.lock().unwrap();
-        search::find_best_move(&mut gs.inner, d, &mut cache, time_limit, parallel)
+        let mut dirty = Vec::new();
+        let res = search::find_best_move(&mut gs.inner, d, &mut cache, &mut dirty, time_limit, parallel);
+        DIRTY_KEYS.lock().unwrap().append(&mut dirty);
+        res
     });
     
     if top_n == 1 {
@@ -574,15 +580,26 @@ fn get_position_hash(gs: &PyGameState) -> String {
 #[pyfunction]
 fn load_move_cache_from_db() {
     let loaded = cache::load_move_cache();
+    // Tell the search how deep the DB goes, so its cache probe knows where to start.
+    if let Some(&max_depth) = loaded.keys().map(|(_, d)| d).max() {
+        search::note_cached_depth(max_depth);
+    }
     let mut cache = MOVE_CACHE.lock().unwrap();
     *cache = loaded;
+    // Everything just loaded is already on disk.
+    DIRTY_KEYS.lock().unwrap().clear();
 }
 
 #[pyfunction]
 #[pyo3(signature = (_cache_arg=None))]
 fn save_move_cache_to_db(_py: Python<'_>, _cache_arg: Option<&Bound<'_, PyAny>>) {
     let cache = MOVE_CACHE.lock().unwrap();
-    cache::save_move_cache(&cache);
+    let mut dirty = DIRTY_KEYS.lock().unwrap();
+    if dirty.is_empty() {
+        return;
+    }
+    cache::save_move_cache_entries(&cache, &dirty);
+    dirty.clear();
 }
 
 #[pyfunction]

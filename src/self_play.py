@@ -6,11 +6,22 @@ The AI plays against itself and 20% of the time picks the second-best move
 to explore alternative branches of the game tree.
 """
 
+import argparse
+import os
 import signal
 import sys
 import time
 import random
 from datetime import datetime
+
+# Running this as a script puts src/ on sys.path, not the repo root, where
+# gamestate/ai/utils live. The DB path in the Rust engine is relative too, so the
+# repo root must also be the working directory.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+os.chdir(_REPO_ROOT)
+
 from gamestate import GameState
 import ai
 from utils import format_move_for_print
@@ -18,6 +29,14 @@ from utils import format_move_for_print
 
 # Global flag for graceful shutdown
 shutdown_requested = False
+
+# Per-move chatter is suppressed under --quiet; summaries always print.
+VERBOSE = True
+
+
+def vprint(*a, **kw):
+    if VERBOSE:
+        print(*a, **kw)
 
 
 def signal_handler(signum, frame):
@@ -58,7 +77,7 @@ def choose_move_with_exploration(gamestate: GameState, depth: int, exploration_r
     # If there is only one move, take it
     if len(top_moves) == 1:
         move, score = top_moves[0]
-        print(f"  Only move: {format_move_for_print(move)}, score: {score:.1f}")
+        vprint(f"  Only move: {format_move_for_print(move)}, score: {score:.1f}")
         return move
     
     # Decide whether to explore
@@ -71,19 +90,41 @@ def choose_move_with_exploration(gamestate: GameState, depth: int, exploration_r
     is_mate = abs(best_score) >= ai.CHECKMATE_SCORE * 0.9
     
     if explore and not is_mate:
-        print(f"  EXPLORING: taking the 2nd-best move")
-        print(f"    1st: {format_move_for_print(best_move)}, score: {best_score:.1f}")
-        print(f"    2nd: {format_move_for_print(second_move)}, score: {second_score:.1f} <- CHOSEN")
+        vprint(f"  EXPLORING: taking the 2nd-best move")
+        vprint(f"    1st: {format_move_for_print(best_move)}, score: {best_score:.1f}")
+        vprint(f"    2nd: {format_move_for_print(second_move)}, score: {second_score:.1f} <- CHOSEN")
         return second_move
     else:
         reason = "mate found" if is_mate else "standard choice"
-        print(f"  Best move ({reason}): {format_move_for_print(best_move)}, score: {best_score:.1f}")
+        vprint(f"  Best move ({reason}): {format_move_for_print(best_move)}, score: {best_score:.1f}")
         if not is_mate:
-            print(f"    2nd: {format_move_for_print(second_move)}, score: {second_score:.1f}")
+            vprint(f"    2nd: {format_move_for_print(second_move)}, score: {second_score:.1f}")
         return best_move
 
 
-def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int = 200):
+def play_random_opening(gamestate: GameState, plies: int):
+    """Plays `plies` uniformly random legal moves to spread workers over the tree.
+
+    Twenty workers starting from the same position and the same deterministic engine
+    would search largely the same nodes; a short random prefix is what makes the
+    extra processes cover new ground instead of duplicating each other.
+    """
+    opening = []
+    for _ in range(plies):
+        moves = gamestate.get_all_legal_moves()
+        if not moves:
+            break
+        move = random.choice(moves)
+        if not gamestate.make_move(move):
+            break
+        if gamestate.needs_promotion_choice:
+            gamestate.complete_promotion('R' if gamestate.current_turn == 'b' else 'r')
+        opening.append(move)
+    return opening
+
+
+def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int = 200,
+                   random_plies: int = 0):
     """
     Plays a single AI-vs-itself game.
     
@@ -107,12 +148,17 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
     print("\n" + "="*60)
     print(f"Starting a new game (depth: {depth}, exploration: {exploration_rate*100:.0f}%)")
     print("="*60 + "\n")
+
+    if random_plies > 0:
+        opening = play_random_opening(gamestate, random_plies)
+        print(f"Random opening ({len(opening)} plies): "
+              + ", ".join(format_move_for_print(m) for m in opening))
     
     while not shutdown_requested:
         move_count += 1
         current_player = "White" if gamestate.current_turn == 'w' else "Black"
         
-        print(f"\n--- Move {move_count} ({current_player}) ---")
+        vprint(f"\n--- Move {move_count} ({current_player}) ---")
         
         # Check for a terminal state
         if gamestate.checkmate:
@@ -163,7 +209,7 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
                 'avg_move_time': sum(move_times) / len(move_times) if move_times else 0
             }
         
-        print(f"  Think time: {move_time:.1f}s")
+        vprint(f"  Think time: {move_time:.1f}s")
         
         # Make the move
         if not gamestate.make_move(move):
@@ -194,7 +240,8 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
     }
 
 
-def run_self_play_training(num_games: int = None, depth: int = 6, exploration_rate: float = 0.2):
+def run_self_play_training(num_games: int = None, depth: int = 6, exploration_rate: float = 0.2,
+                           random_plies: int = 0):
     """
     Runs the self-play training mode.
     
@@ -202,6 +249,7 @@ def run_self_play_training(num_games: int = None, depth: int = 6, exploration_ra
         num_games: Number of games to play (None = unlimited)
         depth: AI search depth
         exploration_rate: Probability of picking the 2nd-best move
+        random_plies: Random legal moves played before each game starts
     """
     global shutdown_requested
     
@@ -212,6 +260,8 @@ def run_self_play_training(num_games: int = None, depth: int = 6, exploration_ra
     print(f"  - Search depth: {depth}")
     print(f"  - Exploration probability: {exploration_rate*100:.0f}%")
     print(f"  - Number of games: {'∞' if num_games is None else num_games}")
+    print(f"  - Random opening plies: {random_plies}")
+    print(f"  - PID: {os.getpid()}")
     print(f"  - Search threads: 1 (single-threaded; run several games in parallel instead)")
     print(f"\nPress Ctrl+C to stop")
     print("="*60)
@@ -251,7 +301,7 @@ def run_self_play_training(num_games: int = None, depth: int = 6, exploration_ra
             print(f"GAME {game_num}" + (f" / {num_games}" if num_games else ""))
             print(f"{'='*60}")
             
-            result = play_self_game(depth, exploration_rate)
+            result = play_self_game(depth, exploration_rate, random_plies=random_plies)
             
             # Update the statistics
             stats['total_games'] += 1
@@ -322,16 +372,39 @@ def run_self_play_training(num_games: int = None, depth: int = 6, exploration_ra
         print("="*60)
 
 
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(
+        description="Self-play training. Searches are single-threaded by design; "
+                    "run several of these processes to use more cores.")
+    p.add_argument("--depth", type=int, default=6,
+                   help="search depth (default: 6). Iterative deepening also caches "
+                        "every shallower depth along the way.")
+    p.add_argument("--games", type=int, default=None,
+                   help="number of games to play (default: unlimited)")
+    p.add_argument("--exploration", type=float, default=0.2,
+                   help="probability of taking the 2nd-best move (default: 0.2)")
+    p.add_argument("--random-plies", type=int, default=0,
+                   help="random legal moves before each game, to spread parallel "
+                        "workers across the tree (default: 0)")
+    p.add_argument("--seed", type=int, default=None,
+                   help="RNG seed; omit for OS entropy (distinct per process)")
+    p.add_argument("--quiet", action="store_true",
+                   help="suppress per-move output, keep per-game summaries")
+    return p.parse_args(argv)
+
+
 def main():
     """Entry point."""
+    global VERBOSE
+    args = parse_args()
+    VERBOSE = not args.quiet
+    if args.seed is not None:
+        random.seed(args.seed)
+
     setup_signal_handlers()
-    
-    # Self-play parameters
-    num_games = None  # None = unlimited, or give a number
-    depth = 6         # Search depth (lower it if this is too slow)
-    exploration_rate = 0.2  # 20% chance of picking the 2nd-best move
-    
-    run_self_play_training(num_games, depth, exploration_rate)
+
+    run_self_play_training(args.games, args.depth, args.exploration,
+                           random_plies=args.random_plies)
 
 
 if __name__ == "__main__":
