@@ -147,7 +147,7 @@ def main():
 
                 if move_success:
                     if gamestate.needs_promotion_choice:
-                        prom_char = 'R' if get_opposite_color(gamestate.current_turn) == 'w' else 'r'
+                        prom_char = 'R' if gamestate.current_turn == 'w' else 'r'
                         gamestate.complete_promotion(prom_char)
                     gamestate.save_state()
                     print("AI move successful.")

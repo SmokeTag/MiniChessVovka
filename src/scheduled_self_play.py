@@ -379,7 +379,7 @@ def play_self_game(depth: int, exploration_rate: float, max_moves: int, game_num
         
         # Handle promotion if needed
         if gamestate.needs_promotion_choice:
-            promo_piece = 'R' if gamestate.current_turn == 'b' else 'r'
+            promo_piece = 'R' if gamestate.current_turn == 'w' else 'r'
             gamestate.complete_promotion(promo_piece)
         
         # Save the cache after every move

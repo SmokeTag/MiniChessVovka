@@ -559,8 +559,9 @@ def draw_promotion_choice(screen, gamestate):
     if not gamestate.needs_promotion_choice or not gamestate.promotion_square:
         return [] # Return empty list if no choice needed
 
-    # Determine color of the player promoting
-    promoting_color = get_opposite_color(gamestate.current_turn)
+    # Determine color of the player promoting (the turn switch is deferred
+    # until complete_promotion, so current_turn is still the promoting side)
+    promoting_color = gamestate.current_turn
     promotion_pieces = PROMOTION_PIECES_WHITE_STR if promoting_color == 'w' else PROMOTION_PIECES_BLACK_STR
     # Queen is not allowed by rules, so available pieces are R, N, B
 

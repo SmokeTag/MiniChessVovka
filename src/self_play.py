@@ -118,7 +118,7 @@ def play_random_opening(gamestate: GameState, plies: int):
         if not gamestate.make_move(move):
             break
         if gamestate.needs_promotion_choice:
-            gamestate.complete_promotion('R' if gamestate.current_turn == 'b' else 'r')
+            gamestate.complete_promotion('R' if gamestate.current_turn == 'w' else 'r')
         opening.append(move)
     return opening
 
@@ -224,7 +224,7 @@ def play_self_game(depth: int = 6, exploration_rate: float = 0.2, max_moves: int
         
         # Handle promotion if needed
         if gamestate.needs_promotion_choice:
-            promo_piece = 'R' if gamestate.current_turn == 'b' else 'r'
+            promo_piece = 'R' if gamestate.current_turn == 'w' else 'r'
             gamestate.complete_promotion(promo_piece)
         
         # Save the cache after every move

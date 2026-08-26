@@ -79,6 +79,6 @@ def build_gamestate(position):
             # the replay is deterministic; default matches self_play.py.
             promo = position.get("promotions", {}).get(str(idx))
             if promo is None:
-                promo = "R" if gs.current_turn == "b" else "r"
+                promo = "R" if gs.current_turn == "w" else "r"
             gs.complete_promotion(promo)
     return gs

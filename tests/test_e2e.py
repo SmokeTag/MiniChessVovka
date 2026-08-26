@@ -53,7 +53,7 @@ class TestE2EGameFlow(unittest.TestCase):
             
             # Handle promotion if needed
             if gs.needs_promotion_choice:
-                prom_char = 'R' if gs.current_turn == 'b' else 'r'
+                prom_char = 'R' if gs.current_turn == 'w' else 'r'
                 gs.complete_promotion(prom_char)
             
             gs.save_state()
@@ -96,7 +96,7 @@ class TestE2EGameFlow(unittest.TestCase):
             
             gs.make_move(move)
             if gs.needs_promotion_choice:
-                gs.complete_promotion('R' if gs.current_turn == 'b' else 'r')
+                gs.complete_promotion('R' if gs.current_turn == 'w' else 'r')
             gs.save_state()
         
         # Check if any pieces were captured (hands should have pieces)
@@ -136,7 +136,7 @@ class TestE2EGameFlow(unittest.TestCase):
             
             gs.make_move(move)
             if gs.needs_promotion_choice:
-                gs.complete_promotion('R' if gs.current_turn == 'b' else 'r')
+                gs.complete_promotion('R' if gs.current_turn == 'w' else 'r')
             gs.save_state()
             
             moves_made.append((move, board_before, turn_before))
@@ -185,16 +185,18 @@ class TestE2EGameFlow(unittest.TestCase):
             
             if gs.needs_promotion_choice:
                 # Test promoting to different pieces
-                for piece in ['R', 'N', 'B', 'Q']:
+                for piece in ['R', 'N', 'B']:
                     gs_copy = copy.deepcopy(gs)
                     success = gs_copy.complete_promotion(piece)
                     self.assertTrue(success, f"Should be able to promote to {piece}")
                     self.assertEqual(gs_copy.board[0][2], piece, 
                                    f"Promoted piece should be {piece}")
+                    self.assertEqual(gs_copy.current_turn, 'b',
+                                   "Turn must pass to black once promotion completes")
                     print(f"Successfully promoted to {piece}")
                 
                 # Complete promotion in main gamestate
-                gs.complete_promotion('Q')
+                gs.complete_promotion('R')
 
     def test_checkmate_detection(self):
         """Test that checkmate detection works in actual gameplay."""
@@ -220,7 +222,7 @@ class TestE2EGameFlow(unittest.TestCase):
             move = legal_moves[0]
             gs.make_move(move)
             if gs.needs_promotion_choice:
-                gs.complete_promotion('Q')
+                gs.complete_promotion('R' if gs.current_turn == 'w' else 'r')
             gs.check_game_over()
         
         # Test passes if check_game_over() runs without error
@@ -267,7 +269,7 @@ class TestE2EGameFlow(unittest.TestCase):
             if best_move:
                 gs.make_move(best_move)
                 if gs.needs_promotion_choice:
-                    gs.complete_promotion('R' if gs.current_turn == 'b' else 'r')
+                    gs.complete_promotion('R' if gs.current_turn == 'w' else 'r')
         
         cache_size_before = len(ai.move_cache)
         print(f"Cache size after moves: {cache_size_before}")
@@ -317,7 +319,7 @@ class TestE2EGameFlow(unittest.TestCase):
             move = legal_moves[0]
             gs.make_move(move)
             if gs.needs_promotion_choice:
-                gs.complete_promotion('R' if gs.current_turn == 'b' else 'r')
+                gs.complete_promotion('R' if gs.current_turn == 'w' else 'r')
             
             # Turn should have switched
             expected_turn = 'b' if turn_before == 'w' else 'w'

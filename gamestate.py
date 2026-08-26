@@ -378,8 +378,9 @@ class GameState:
             return False
 
         r, f = self.promotion_square
-        # Determine original player color based on whose turn it *was*
-        original_player_color = get_opposite_color(self.current_turn) # Turn hasn't switched yet
+        # make_move returns early without switching the turn while a promotion is
+        # pending, so current_turn is still the player who moved the pawn.
+        original_player_color = self.current_turn
 
         valid_promotions = PROMOTION_PIECES_WHITE_STR if original_player_color == 'w' else PROMOTION_PIECES_BLACK_STR
         if chosen_piece_char not in valid_promotions:
@@ -423,8 +424,8 @@ class GameState:
         self.needs_promotion_choice = False
         self.promotion_square = None
         self.last_move_for_promotion = None
-        # Turn already switched when make_move returned True for promotion pending
-        # self.current_turn = get_opposite_color(self.current_turn) # DO NOT switch turn again
+        # make_move deferred the turn switch until the choice was made.
+        self.current_turn = get_opposite_color(self.current_turn)
 
         self.selected_square = None # Clear selections
         self.selected_drop_piece = None
