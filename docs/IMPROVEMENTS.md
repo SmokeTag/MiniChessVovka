@@ -224,11 +224,10 @@ class Bitboard:
 
 **Implementation:**
 ```python
-# There is already a stub in nn/model.py!
-import torch
-from nn.model import ChessNet
-
-model = ChessNet()
+# No stub exists: the old nn/model.py was deleted (its action space was
+# board_size**4, which cannot express a drop or a promotion choice).
+# Start from the Rust GameState and an encoding that covers drops.
+model = PolicyValueNet()          # 24 input planes at 6x6, 2196 policy logits
 model.load_state_dict(torch.load('best_model.pth'))
 
 def nn_evaluate(board_state):
@@ -256,7 +255,8 @@ def nn_evaluate(board_state):
 ### 10. Monte Carlo Tree Search (MCTS) + NN
 **Solution:**
 - Combine MCTS with neural-network evaluation (as in AlphaZero)
-- There is already a stub in `nn/mcts.py`!
+- Write it against the Rust `GameState` (make/undo, no allocation). The old `nn/mcts.py` stub was
+  deleted: it deep-copied a state per child and never negated the value between players.
 
 **Algorithm:**
 1. Selection: pick a node by UCB

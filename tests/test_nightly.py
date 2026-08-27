@@ -12,11 +12,16 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import ai
+from tests.cache_isolation import IsolatedCacheDB
 
+# Relative on purpose. `DB_PATH` in engine_rs/src/cache.rs is the hardcoded relative
+# string "move_cache.db", so the Rust side always opens the DB in the process CWD.
+# Keeping this relative too means both halves follow the chdir in IsolatedCacheDB
+# and land on the same throwaway file.
 DB_PATH = "move_cache.db"
 
 
-class TestDatabaseMigration(unittest.TestCase):
+class TestDatabaseMigration(IsolatedCacheDB):
     """Test cases for database schema migration from old to new format."""
 
     def test_setup_db_creates_correct_schema(self):
@@ -61,7 +66,7 @@ class TestDatabaseMigration(unittest.TestCase):
         self.assertIn('depth', columns, "After migration, schema should have depth column")
 
 
-class TestDatabaseOperations(unittest.TestCase):
+class TestDatabaseOperations(IsolatedCacheDB):
     """Test database operations with Rust engine cache."""
 
     def test_save_and_load_cache(self):
@@ -90,13 +95,6 @@ class TestDatabaseOperations(unittest.TestCase):
         conn.close()
 
         self.assertEqual(len(rows), 2, "Should have 2 entries for same hash at different depths")
-
-        # Clean up test data
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM move_cache WHERE hash LIKE 'test_hash_nightly%'")
-        conn.commit()
-        conn.close()
 
 
 if __name__ == '__main__':

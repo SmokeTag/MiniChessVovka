@@ -5,6 +5,8 @@ Tests full game scenarios including AI gameplay, moves, captures, drops, and gam
 """
 
 import os
+import random
+import sqlite3
 import sys
 import unittest
 import copy
@@ -14,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gamestate import GameState
 import ai
+from tests.cache_isolation import isolated_cache_db
 from pieces import EMPTY_SQUARE
 from utils import format_move_for_print
 
@@ -252,40 +255,72 @@ class TestE2EGameFlow(unittest.TestCase):
         self.assertTrue(True)
 
     def test_move_cache_persistence(self):
-        """Test that move cache persists across games."""
+        """Rows written by a search survive a save/load round trip.
+
+        Runs in a throwaway CWD via isolated_cache_db(): the Rust cache resolves
+        "move_cache.db" against the process CWD, so without it this test files its
+        scratch searches into the live training cache in the repo root.
+
+        Counted straight out of SQLite rather than through `len(ai.move_cache)` --
+        that dict is vestigial (Rust owns the cache and never mirrors back into
+        it), so the old before/after comparison was 0 == 0 and passed even when
+        nothing at all was persisted.
+        """
         print("\n=== Testing Move Cache Persistence ===")
-        
-        # Clear cache and play a game
-        ai.move_cache.clear()
-        
-        gs = GameState()
-        gs.setup_initial_board()
-        
-        # Make a few moves to populate cache
-        for _ in range(3):
-            if gs.checkmate or gs.stalemate:
-                break
-            best_move = ai.find_best_move(gs, depth=6)
-            if best_move:
-                gs.make_move(best_move)
+
+        def row_count():
+            conn = sqlite3.connect("move_cache.db")
+            try:
+                return conn.execute("SELECT COUNT(*) FROM move_cache").fetchone()[0]
+            finally:
+                conn.close()
+
+        rng = random.Random(20260827)
+
+        def walk_off_book(gs, plies):
+            """Random legal plies, so the next search is not a cache hit."""
+            for _ in range(plies):
+                moves = gs.get_all_legal_moves()
+                if not moves or gs.checkmate or gs.stalemate or gs.is_draw:
+                    return
+                gs.make_move(rng.choice(sorted(moves, key=repr)), False)
                 if gs.needs_promotion_choice:
-                    gs.complete_promotion('R' if gs.current_turn == 'w' else 'r')
-        
-        cache_size_before = len(ai.move_cache)
-        print(f"Cache size after moves: {cache_size_before}")
-        
-        # Save cache
-        ai.save_move_cache_to_db(ai.move_cache)
-        
-        # Clear and reload
-        ai.move_cache.clear()
-        ai.load_move_cache_from_db()
-        
-        cache_size_after = len(ai.move_cache)
-        print(f"Cache size after reload: {cache_size_after}")
-        
-        self.assertEqual(cache_size_before, cache_size_after, 
-                        "Cache should persist after save/load")
+                    piece = rng.choice(['R', 'N', 'B'])
+                    # The turn has already passed by the time promotion is
+                    # pending, so uppercase belongs to the side that just moved.
+                    gs.complete_promotion(piece if gs.current_turn == 'b' else piece.lower())
+                gs.check_game_over()
+
+        with isolated_cache_db():
+            ai.setup_db()
+
+            gs = GameState()
+            gs.setup_initial_board()
+
+            # The Rust cache is process-global and setUp loaded the live DB into
+            # it, so an opening search can be a pure cache hit that inserts
+            # nothing. Walk further off the book until a search actually misses
+            # and writes -- self-correcting however full the real cache gets.
+            saved = 0
+            for _ in range(12):
+                ai.find_best_move(gs, depth=5)
+                ai.save_move_cache_to_db(ai.move_cache)
+                saved = row_count()
+                if saved:
+                    break
+                walk_off_book(gs, 4)
+
+            print(f"Rows written by the searches: {saved}")
+            self.assertGreater(saved, 0, "Searching should have written cache rows")
+
+            # Reload into the Rust cache and write it back out: a round trip must
+            # not lose rows.
+            ai.load_move_cache_from_db()
+            ai.save_move_cache_to_db(ai.move_cache)
+
+            reloaded = row_count()
+            print(f"Rows after reload + save: {reloaded}")
+            self.assertEqual(saved, reloaded, "Cache should persist after save/load")
 
     def test_game_state_consistency(self):
         """Test that game state remains consistent throughout gameplay."""
