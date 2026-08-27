@@ -22,8 +22,20 @@ DB_PATH = "book.db"
 # --- Database / Cache ---
 
 def setup_db():
-    """Create the opening book schema in book.db (rebuilding it on a version change)."""
+    """Create the opening book schema in book.db if it is not already there.
+
+    Raises RuntimeError if book.db was written by a different SCHEMA_VERSION. It never
+    drops anything -- see rebuild_book().
+    """
     _rs.setup_db()
+
+
+def rebuild_book():
+    """Drop both book tables and recreate them at the current SCHEMA_VERSION.
+
+    Destructive, and nothing calls it for you. `rebuild_book.py` is the front door.
+    """
+    _rs.rebuild_book()
 
 
 def load_move_cache_from_db():

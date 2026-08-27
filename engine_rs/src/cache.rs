@@ -25,6 +25,7 @@
 
 use rusqlite::{Connection, params};
 use std::collections::HashMap;
+use std::fmt;
 
 const DB_PATH: &str = "book.db";
 
@@ -34,6 +35,38 @@ const DB_PATH: &str = "book.db";
 /// ("no depth column -> DROP TABLE"), a heuristic that cannot tell a schema this module
 /// has never seen from one it wrote itself. A version integer can.
 pub const SCHEMA_VERSION: i32 = 1;
+
+/// What can go wrong opening or preparing the book.
+#[derive(Debug)]
+pub enum BookError {
+    Sqlite(rusqlite::Error),
+    /// The file on disk was written by a different schema version. Nothing has been
+    /// changed; the caller has to decide whether to throw the book away.
+    SchemaMismatch { found: i32, expected: i32 },
+}
+
+impl fmt::Display for BookError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BookError::Sqlite(e) => write!(f, "{}", e),
+            BookError::SchemaMismatch { found, expected } => write!(
+                f,
+                "{} is at schema version {}, but this build expects {}. \
+                 Nothing was changed: the book is left exactly as it is. \
+                 To discard it and start over, run `./venv/bin/python rebuild_book.py` \
+                 (drops book_move and position, stamps version {}). Every row is a pure \
+                 function of the engine and can be recomputed by re-searching.",
+                DB_PATH, found, expected, expected
+            ),
+        }
+    }
+}
+
+impl From<rusqlite::Error> for BookError {
+    fn from(e: rusqlite::Error) -> Self {
+        BookError::Sqlite(e)
+    }
+}
 
 /// One ranked move for one position. `rank` 1 is the best move.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,15 +116,23 @@ fn user_version(conn: &Connection) -> Result<i32, rusqlite::Error> {
     conn.query_row("PRAGMA user_version", [], |row| row.get(0))
 }
 
-/// Creates the book schema, rebuilding it if the file was written by another version.
+/// Creates the book schema if it is absent, and refuses to touch a foreign one.
 ///
-/// A version mismatch drops both tables. That is safe by construction: everything in
-/// them is a pure function of the engine, recomputable by re-searching, and there is no
-/// hand-entered data to lose.
-pub fn setup_db() -> Result<(), rusqlite::Error> {
+/// **This never drops a table.** A `SCHEMA_VERSION` mismatch is reported as
+/// [`BookError::SchemaMismatch`] and the file is left exactly as it was, because
+/// "recreate the schema" runs on paths nobody thinks of as destructive -- the first save
+/// of a worker, a stray call from a test, a script that opens the book to look at it --
+/// and a version bump would turn any of them into a silent wipe of the training data.
+/// Discarding the book is [`rebuild_db`], which only runs when a human asks for it.
+pub fn setup_db() -> Result<(), BookError> {
     let conn = open_db()?;
+    ensure_schema(&conn)
+}
 
-    let version = user_version(&conn).unwrap_or(0);
+/// Schema creation against an already-open connection. Split out so a write transaction
+/// can check the version without opening a second connection to the same file.
+fn ensure_schema(conn: &Connection) -> Result<(), BookError> {
+    let version = user_version(conn).unwrap_or(0);
     let has_tables: bool = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('book_move','position')")?
         .query_map([], |_| Ok(()))?
@@ -99,14 +140,29 @@ pub fn setup_db() -> Result<(), rusqlite::Error> {
         > 0;
 
     if has_tables && version != SCHEMA_VERSION {
-        eprintln!(
-            "[BOOK] schema version {} != {}, rebuilding {}",
-            version, SCHEMA_VERSION, DB_PATH
-        );
-        conn.execute("DROP TABLE IF EXISTS book_move", [])?;
-        conn.execute("DROP TABLE IF EXISTS position", [])?;
+        return Err(BookError::SchemaMismatch { found: version, expected: SCHEMA_VERSION });
     }
 
+    create_tables(conn)
+}
+
+/// Drops both tables and recreates them at the current `SCHEMA_VERSION`.
+///
+/// The one destructive path in this module, and it exists only to be called explicitly
+/// -- `rebuild_book.py`, which asks before it runs. Nothing calls it on your behalf.
+pub fn rebuild_db() -> Result<(), BookError> {
+    let conn = open_db()?;
+    let version = user_version(&conn).unwrap_or(0);
+    eprintln!(
+        "[BOOK] rebuilding {}: dropping book_move and position (was schema version {})",
+        DB_PATH, version
+    );
+    conn.execute("DROP TABLE IF EXISTS book_move", [])?;
+    conn.execute("DROP TABLE IF EXISTS position", [])?;
+    create_tables(&conn)
+}
+
+fn create_tables(conn: &Connection) -> Result<(), BookError> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS book_move (
             hash         TEXT NOT NULL,
@@ -150,9 +206,10 @@ pub fn load_book() -> Book {
             let version = user_version(&conn).unwrap_or(0);
             if version != SCHEMA_VERSION {
                 eprintln!(
-                    "[BOOK] {} is at schema version {}, not {}; ignoring it until a write rebuilds it",
-                    DB_PATH, version, SCHEMA_VERSION
+                    "[BOOK] {}",
+                    BookError::SchemaMismatch { found: version, expected: SCHEMA_VERSION }
                 );
+                eprintln!("[BOOK] loading it as empty; nothing on disk was touched");
                 return book;
             }
             match conn.prepare(
@@ -204,31 +261,21 @@ pub fn load_book() -> Book {
 /// `IMMEDIATE` matters in WAL: taking the write lock up front is what stops a
 /// read-then-write transaction from failing with `SQLITE_BUSY_SNAPSHOT` when another
 /// worker commits underneath it.
-pub fn save_book_entries(book: &Book, hashes: &[String]) {
+pub fn save_book_entries(book: &Book, hashes: &[String]) -> Result<(), BookError> {
     if hashes.is_empty() {
-        return;
+        return Ok(());
     }
+
+    let conn = open_db()?;
 
     // A process that searched without ever loading the book -- a bench child, a test,
     // `precalc_openings.py` on a fresh checkout -- would otherwise reach the INSERTs with
-    // no tables to insert into and lose the whole run's work to an error log.
-    if let Err(e) = setup_db() {
-        eprintln!("Error setting up book DB: {}", e);
-        return;
-    }
+    // no tables to insert into and lose the whole run's work to an error log. A foreign
+    // schema stops the save here instead, with the rows still in memory and the caller
+    // told why, rather than writing this build's rows into someone else's tables.
+    ensure_schema(&conn)?;
 
-    let conn = match open_db() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error opening book DB: {}", e);
-            return;
-        }
-    };
-
-    if let Err(e) = conn.execute_batch("BEGIN IMMEDIATE") {
-        eprintln!("Error starting book transaction: {}", e);
-        return;
-    }
+    conn.execute_batch("BEGIN IMMEDIATE")?;
 
     let mut written = 0usize;
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -266,11 +313,11 @@ pub fn save_book_entries(book: &Book, hashes: &[String]) {
     }
 
     if let Err(e) = conn.execute_batch("COMMIT") {
-        eprintln!("Error committing book transaction: {}", e);
         let _ = conn.execute_batch("ROLLBACK");
-        return;
+        return Err(e.into());
     }
     eprintln!("Saved {} positions to the book.", written);
+    Ok(())
 }
 
 /// Inserts the `position` row for `hash`, or reconciles it with the row already there.
