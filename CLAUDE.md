@@ -34,6 +34,7 @@ Always invoke Python through the project venv (`./venv/bin/python`, or activate 
 ./bot_start.sh casual|rated        # chess.com bot (needs .env + playwright chromium)
 ./bot_stop.sh ; ./monitor_bot.sh
 ./venv/bin/python precalc_openings.py   # fill the opening book by deep search
+./venv/bin/python rebuild_book.py       # the only thing that deletes book rows; asks first
 ```
 
 ## Filling the opening book in parallel
@@ -67,10 +68,11 @@ Things about this that are easy to get wrong:
   `IMMEDIATE` also avoids `SQLITE_BUSY_SNAPSHOT` on the read-then-write inside it.
 - **The DB is in WAL mode** with a 30s busy timeout (`cache::open_db`). Sidecar files
   `book.db-wal` / `-shm` are gitignored.
-- **Reading never writes.** `cache::load_book` will not create the file, create the tables, or
-  rebuild a foreign schema — a missing or stale book loads empty and says so. Only a write builds
-  the schema. That is what lets the test suite reload the live book without creating (or, after a
-  `SCHEMA_VERSION` bump, dropping) the real `book.db`.
+- **Nothing drops the book on its own.** `cache::load_book` will not even create the file — a
+  missing or stale book loads empty and says so. `setup_db` creates the tables when they are
+  absent and **refuses** a `SCHEMA_VERSION` mismatch, naming both versions and the way out; a save
+  into a foreign schema raises instead of writing, leaving the rows in memory and `DIRTY_KEYS`
+  intact so the work is still recoverable. `rebuild_book.py` is the only thing that deletes rows.
 
 Depth 10 costs roughly: median ~3s/move, p90 ~12s, worst seen ~31s — crazyhouse midgames with full
 hands are far more expensive than the opening. `--random-plies` puts each worker in a different
@@ -105,8 +107,10 @@ override, so the only seam is the CWD: `tests/cache_isolation.py` gives an `isol
 context manager and an `IsolatedCacheDB` TestCase base that run a test in a throwaway directory and
 reload the real book afterwards (the Rust book is process-global, so a test that skipped the reload
 would leave its scratch rows to be written back by a later test). **Never call `ai.setup_db()`
-outside that isolation** — it builds the schema in the CWD, and after a `SCHEMA_VERSION` bump it
-drops what is there first. Anything the NN work adds — replay buffers, checkpoints — goes under a
+outside that isolation** — it builds the schema in the CWD, which creates a `book.db` wherever the
+test happens to be standing. It will not drop an existing one (that is `rebuild_book.py`, which
+asks first), but a test has no business creating one in the repo root either. Anything the NN work
+adds — replay buffers, checkpoints — goes under a
 configurable path outside the repo root for the same reason. A full `pytest tests/ -q` must create
 no repo-root `book.db` at all; check with `ls` before and after.
 
@@ -188,8 +192,14 @@ position(hash, fen, ply)                                  -- PK hash
 - `eval_version` is `EVAL_VERSION` in `eval.rs` and is **bumped by hand whenever an eval constant
   changes**. Nothing detects a stale value; bumping invalidates the book in place rather than
   dropping it.
-- `SCHEMA_VERSION` lives in `PRAGMA user_version`. A mismatch drops and rebuilds both tables, which
-  replaced the old "no depth column → DROP TABLE" column-sniffing.
+- `SCHEMA_VERSION` lives in `PRAGMA user_version`. A mismatch makes `setup_db` **refuse** — it
+  returns an error naming the on-disk version, the expected one, and how to rebuild, and touches
+  nothing. It never drops, because "recreate the schema" runs on paths nobody thinks of as
+  destructive (a worker's first save, a stray call from a test), and a version bump would turn any
+  of them into a silent wipe of the training data. Discarding the book is
+  `./venv/bin/python rebuild_book.py`, which shows what is there and asks before dropping both
+  tables and stamping the new version (`--yes` skips the prompt). This replaced the old
+  "no depth column → DROP TABLE" column-sniffing, which was both a guess *and* destructive.
 - The book is process-global and filled as you search, so **searching the same position twice in one
   process is a hit that reports ~0s** — the reason `bench/` forks a fresh process per measurement and
   calls `find_best_move_with_score` (a plain single-PV search) rather than asking for two moves.

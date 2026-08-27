@@ -8,7 +8,7 @@ mod cache;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyTuple, PyDict};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -650,21 +650,38 @@ fn load_move_cache_from_db() {
     DIRTY_KEYS.lock().unwrap().clear();
 }
 
+/// Writes the positions searched since the last save.
+///
+/// Raises rather than swallowing a failure: on a schema mismatch the rows are still in
+/// memory and `dirty` is left intact, so a worker stops with its work recoverable
+/// instead of quietly dropping every search it has done.
 #[pyfunction]
 #[pyo3(signature = (_cache_arg=None))]
-fn save_move_cache_to_db(_py: Python<'_>, _cache_arg: Option<&Bound<'_, PyAny>>) {
+fn save_move_cache_to_db(_py: Python<'_>, _cache_arg: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
     let book = BOOK.lock().unwrap();
     let mut dirty = DIRTY_KEYS.lock().unwrap();
     if dirty.is_empty() {
-        return;
+        return Ok(());
     }
-    cache::save_book_entries(&book, &dirty);
+    cache::save_book_entries(&book, &dirty)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     dirty.clear();
+    Ok(())
 }
 
+/// Creates the book schema if it is absent. Raises on a foreign schema; never drops.
 #[pyfunction]
-fn setup_db() {
-    let _ = cache::setup_db();
+fn setup_db() -> PyResult<()> {
+    cache::setup_db().map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Drops both book tables and recreates them at the current SCHEMA_VERSION.
+///
+/// Destructive and deliberately unreachable by accident: nothing in the engine calls
+/// this. `rebuild_book.py` is the front door, and it asks first.
+#[pyfunction]
+fn rebuild_book() -> PyResult<()> {
+    cache::rebuild_db().map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
 /// Number of positions the in-memory book holds.
@@ -716,6 +733,7 @@ fn minichess_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_move_cache_from_db, m)?)?;
     m.add_function(wrap_pyfunction!(save_move_cache_to_db, m)?)?;
     m.add_function(wrap_pyfunction!(setup_db, m)?)?;
+    m.add_function(wrap_pyfunction!(rebuild_book, m)?)?;
     m.add_function(wrap_pyfunction!(book_size, m)?)?;
     m.add_function(wrap_pyfunction!(to_fen, m)?)?;
     m.add_function(wrap_pyfunction!(from_fen, m)?)?;
