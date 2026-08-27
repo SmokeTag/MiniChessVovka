@@ -1,32 +1,39 @@
 #!/bin/bash
-# Launch script for Mini Chess with the strong AI
+# Launch the Pygame front end for Mini Crazyhouse 6x6.
+#
+# Search depth is chosen in the UI (the "Depth" stepper) and remembered in
+# gui_settings.json, so this script no longer claims a number it does not set.
 
-echo "=========================================="
-echo "Mini Chess 6x6 Crazyhouse - Strong AI"
-echo "=========================================="
-echo ""
-echo "AI settings:"
-echo "- Search depth: 6 plies (fast game)"
-echo "- Search: single-threaded (parallel path disabled)"
-echo "- Quiescence depth: 4"
-echo "- Move cache: enabled (persisted to the DB)"
-echo ""
-echo "Starting the game..."
-echo ""
+cd "$(dirname "$0")" || exit 1
 
-# Change to the script's directory
-cd "$(dirname "$0")"
-
-# Check that venv exists
 if [ ! -d "venv" ]; then
-    echo "ERROR: venv not found!"
-    echo "Create it with: python3 -m venv venv"
-    echo "Then install the dependencies: ./venv/bin/pip install -r requirements.txt"
+    echo "ERROR: venv not found."
+    echo "  python3 -m venv venv"
+    echo "  ./venv/bin/pip install -r requirements.txt"
     exit 1
 fi
 
-# Start the game
-./venv/bin/python main.py
+if ! ./venv/bin/python -c "import minichess_engine" 2>/dev/null; then
+    echo "ERROR: the Rust engine (minichess_engine) is not installed in ./venv."
+    echo "  source venv/bin/activate"
+    echo "  cd engine_rs && PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop --release"
+    exit 1
+fi
 
-echo ""
+cat <<'BANNER'
+==========================================
+ Mini Crazyhouse 6x6
+==========================================
+ Mouse   drag a piece, or click it then click a target
+         click a piece in your hand strip, then a square, to drop it
+ Arrows  step through the game   Home/End  jump to start/live
+ U       take back one half-move (Ctrl+Z also works)
+ F       flip board     H  hints     + / -  engine depth
+ Ctrl+N  new game       Esc  cancel a selection / return to live
+
+ The window is resizable; its size and your settings are remembered.
+BANNER
+
+./venv/bin/python main.py
+echo
 echo "Game over."

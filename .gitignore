@@ -70,3 +70,4 @@ training_workers.pid
 
 # Claude Code worktrees (2 GB of throwaway build trees)
 .claude/worktrees/
+gui_settings.json

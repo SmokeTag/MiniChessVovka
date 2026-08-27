@@ -100,6 +100,36 @@ a fresh Rust `GameState` on *every* `find_best_move` call. A rules change (a new
 promotion behaviour, check detection) must land in **both** or the engine will search a position the
 GUI does not agree with. Nothing detects that drift automatically.
 
+**The Pygame front end is `main.py` + `gui.py` + `layout.py` + `settings.py`.**
+`layout.Layout` recomputes every rectangle from the current window size — nothing else may
+assume a pixel dimension, and `config.SQUARE_SIZE` survives only because `pieces.py`'s unused
+vector primitives import it. Four invariants are load-bearing and easy to undo by accident:
+
+- **The search never blocks the UI.** `main.Game` polls a worker thread and keeps drawing;
+  Undo / New game / Flip / Hint stay live during a search. Results carry a `generation` tag
+  and are discarded if the position moved on, so taking back a move mid-search cannot apply a
+  stale answer to the wrong board. Anything that changes the position must call
+  `Game.invalidate()` (which bumps the generation) or that guarantee breaks.
+- **Panel zones have fixed heights** (`layout.py`): header, controls and the bottom status band
+  are reserved, and only the move list flexes. Hands live in strips beside the board rather
+  than in the panel, and show a `×N` count instead of one sprite per copy — both so that a
+  filling hand can never push a button out from under the cursor.
+- **Redraw is dirty-flagged.** `Game.dirty` gates rendering; the loop idles at `IDLE_FPS`
+  and only rises to `FPS` while something animates. Fonts and scaled sprites are memoised in
+  `gui.py`, so a still board costs almost nothing. Any new per-frame `smoothscale` undoes this.
+- **Flip is a view transform only.** It must never change what is true about the position —
+  the previous build swapped which king it tested for check, which silently disabled the check
+  highlight on a flipped board.
+
+Drawing takes a `BoardView` snapshot rather than reading the live `GameState`, which is what
+lets the arrow keys render any past ply from `gamestate.saved_states`. UI state lives in
+`main.UIState`; the `selected_square` / `highlighted_moves` fields on `GameState` are legacy and
+the GUI no longer uses them. Hit regions are produced by the code that draws each control, so a
+control can never be clickable where it is not visible — and the promotion picker clears every
+other region, which is what stops clicks reaching the buttons underneath it.
+
+`gui_settings.json` (gitignored) remembers window size, depth, AI toggles, hints and orientation.
+
 **`ai.py` is a thin shim, not the AI.** It exists so `gui.py`, `play_online.py`, and the training
 scripts keep a stable Python API while all real work happens in Rust. Its module-level `move_cache`
 and `tt` dicts are vestigial — the Rust side owns both caches.
@@ -146,6 +176,10 @@ a full measure → propose → implement-in-worktrees → verify pass over this 
 
 ## Gotchas
 
+- `config.AI_MOVE_DELAY` is gone. It was a flat 1.5s stall imposed *after* the search returned
+  and *before* the move was drawn, with input blocked throughout — so it made nothing more
+  visible and only added latency. `MIN_MOVE_DISPLAY` replaces it: a floor on how long a move
+  stays on screen before the *next* search starts, which never blocks input.
 - `bot_start.sh` rewrites `play_online.py` in place with `sed -i ''` to flip rated/casual — BSD syntax
   that fails on Linux (GNU sed reads `''` as the script). Set `rated=` in `create_minihouse_game` by
   hand, or fix the sed, rather than assuming the mode switched.
