@@ -84,9 +84,18 @@ training would file shallow answers as deep ones.
 ./venv/bin/python -m pytest tests/test_ai_optimization.py -q -s
 ```
 
-Tests are slow by design — several play full AI-vs-AI games — and they touch the real
-`move_cache.db` in the repo root (`test_nightly.py` will drop and recreate the table when checking
-schema migration). Prefer running a single test while iterating.
+Tests are slow by design — several play full AI-vs-AI games. Prefer running a single test while
+iterating.
+
+**No test may write to the repo-root `move_cache.db`** — that file is the live training cache, and
+`test_nightly.py` drops and recreates the table. `DB_PATH` in `cache.rs` is the relative string
+`"move_cache.db"` with no override, so the only seam is the CWD: `tests/cache_isolation.py` gives an
+`isolated_cache_db()` context manager and an `IsolatedCacheDB` TestCase base that run a test in a
+throwaway directory and reload the real cache afterwards (the Rust cache is process-global, so a
+test that skipped the reload would leave its scratch rows to be written back by a later test).
+Anything the NN work adds — replay buffers, checkpoints — goes under a configurable path outside the
+repo root for the same reason. A full `pytest tests/ -q` should leave `move_cache.db` byte-identical;
+`md5sum` it before and after if you touch this.
 
 Rust has no test suite; `cargo build --release` inside `engine_rs/` only checks that it compiles —
 use `maturin develop --release` for anything you intend to run.
@@ -98,7 +107,10 @@ GUI, bot, and training all mutate it — while `engine_rs/src/gamestate.rs` re-i
 generation for the search. `ai._sync_to_rust()` copies board/turn/hands/king_pos/promoted_pieces into
 a fresh Rust `GameState` on *every* `find_best_move` call. A rules change (a new drop restriction,
 promotion behaviour, check detection) must land in **both** or the engine will search a position the
-GUI does not agree with. Nothing detects that drift automatically.
+GUI does not agree with. `tests/test_rules_parity.py` is what catches that drift: it plays identical
+random games through both and compares legal-move sets, terminal flags, ply counters and promotion
+state at every ply. Run it with `RULES_PARITY_GAMES=500` after any rules change — the 50-game default
+is a smoke test, not a sweep.
 
 **The Pygame front end is `main.py` + `gui.py` + `layout.py` + `settings.py`.**
 `layout.Layout` recomputes every rectangle from the current window size — nothing else may
@@ -185,8 +197,11 @@ a full measure → propose → implement-in-worktrees → verify pass over this 
   hand, or fix the sed, rather than assuming the mode switched.
 - `autorun_training.sh`, `minichesstrain.service`, and `minichesstrain.timer` are pinned to a
   deployment path (`/srv/MiniChessVovka`, user `ubuntu`) and are not runnable as-is from a checkout.
-- `nn/` (PolicyValueNet, MCTS) and `engine/env.py` are an unfinished torch/RL experiment; torch is not
-  in `requirements.txt` and nothing in the live path imports them.
+- `nn/` and `engine/env.py` are **deleted**. They were an unfinished torch/RL experiment that nothing
+  imported, and they were actively misleading as a starting point for the planned AlphaZero work:
+  `nn/model.py` sized the action space as `board_size**4`, which cannot express a drop or a promotion
+  choice, and `nn/mcts.py` never negated the value between alternating players. Anything neural starts
+  from the Rust `GameState`, not from those files (`git show 709f963:nn/model.py` if you want them back).
 - `config.py`'s eval constants (`CENTER_BONUS`, `KING_SAFETY_BONUS`, `PIECE_VALUES` in `pieces.py`, …)
   are dead weight from the pre-Rust era — the numbers that actually decide moves are the `const`s at
   the top of `engine_rs/src/eval.rs`. Editing the Python ones changes nothing.
