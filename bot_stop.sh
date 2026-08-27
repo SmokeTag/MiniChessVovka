@@ -44,11 +44,14 @@ if [ -n "$MPID" ]; then
     echo "🛑 Monitor stopped"
 fi
 
-# Show cache stats
+# Show book stats
 cd "$(dirname "$0")"
 python3 -c "
-import sqlite3
-c = sqlite3.connect('move_cache.db').cursor()
-c.execute('SELECT COUNT(*) FROM move_cache')
-print(f'💾 Cache: {c.fetchone()[0]} entries')
+import os, sqlite3
+if not os.path.exists('book.db'):
+    print('💾 Book: not created yet')
+else:
+    c = sqlite3.connect('file:book.db?mode=ro', uri=True).cursor()
+    c.execute('SELECT COUNT(*) FROM position')
+    print(f'💾 Book: {c.fetchone()[0]} positions')
 " 2>/dev/null

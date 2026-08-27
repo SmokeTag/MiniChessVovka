@@ -33,10 +33,10 @@ Always invoke Python through the project venv (`./venv/bin/python`, or activate 
 ./train_status.sh ; ./train_stop.sh
 ./bot_start.sh casual|rated        # chess.com bot (needs .env + playwright chromium)
 ./bot_stop.sh ; ./monitor_bot.sh
-./venv/bin/python precalc_openings.py   # fill the opening cache by deep search
+./venv/bin/python precalc_openings.py   # fill the opening book by deep search
 ```
 
-## Filling the move cache in parallel
+## Filling the opening book in parallel
 
 `src/self_play.py` takes `--depth/--games/--exploration/--random-plies/--seed/--quiet`. Throughput
 comes from **many single-threaded workers**, never from `parallel=True` — see the parallelism policy
@@ -44,35 +44,47 @@ below.
 
 ```bash
 ./train_parallel.sh 20 10     # 20 workers, depth 10; logs in logs/selfplay/, PIDs in training_workers.pid
-./train_status.sh             # workers alive + row counts per depth
-./train_stop.sh               # SIGTERM, waits for each worker to flush, SIGKILL after 60s
+./train_status.sh             # workers alive + book positions per completed depth
+./train_stop.sh               # SIGTERM, waits for each worker to flush, SIGKILL after 600s
+./train_stop.sh 2000          # same, but allow 2000s — SIGTERM cannot interrupt a search in flight
 ```
 
-Three things about this that are easy to get wrong:
+Things about this that are easy to get wrong:
 
 - **Workers must run from the repo root.** `DB_PATH` in `cache.rs` is the relative string
-  `"move_cache.db"`, so a worker started elsewhere silently creates its own DB. `self_play.py`
+  `"book.db"`, so a worker started elsewhere silently creates its own DB. `self_play.py`
   now `os.chdir`s to the repo root itself (and puts it on `sys.path`; without that,
   `python src/self_play.py` cannot import `gamestate`).
 - **Saves are incremental.** `save_move_cache_to_db` used to re-`INSERT OR REPLACE` the process's
   entire cache after *every move* — ~5µs/row, so ~1.3s per move once a worker holds 250k entries,
-  times N workers on one write lock. `search::find_best_move` now returns the keys it inserted via
-  a `dirty` out-param, `lib.rs` accumulates them in `DIRTY_KEYS`, and only those rows get written.
-  Any new `move_cache.insert` in `search.rs` **must** push its key onto `dirty` or the entry never
-  reaches disk.
+  times N workers on one write lock. `search::find_best_move` now returns the position hashes it
+  wrote via a `dirty` out-param, `lib.rs` accumulates them in `DIRTY_KEYS`, and only those rows get
+  written. Anything new that inserts into the book **must** go through `search::book_store` (which
+  pushes onto `dirty`) or the entry never reaches disk.
+- **Both tables are written in one `BEGIN IMMEDIATE` transaction on one connection**
+  (`cache::save_book_entries`). Twenty workers share one write lock, so two transactions would
+  double the lock acquisitions and could leave a `book_move` row with no `position` row beside it.
+  `IMMEDIATE` also avoids `SQLITE_BUSY_SNAPSHOT` on the read-then-write inside it.
 - **The DB is in WAL mode** with a 30s busy timeout (`cache::open_db`). Sidecar files
-  `move_cache.db-wal` / `-shm` are gitignored.
+  `book.db-wal` / `-shm` are gitignored.
+- **Reading never writes.** `cache::load_book` will not create the file, create the tables, or
+  rebuild a foreign schema — a missing or stale book loads empty and says so. Only a write builds
+  the schema. That is what lets the test suite reload the live book without creating (or, after a
+  `SCHEMA_VERSION` bump, dropping) the real `book.db`.
 
 Depth 10 costs roughly: median ~3s/move, p90 ~12s, worst seen ~31s — crazyhouse midgames with full
 hands are far more expensive than the opening. `--random-plies` puts each worker in a different
 position so N workers cover new ground instead of re-searching the same tree. Workers load the DB
 only at startup, so they do not see each other's entries until restarted.
 
-Note that **purging shallow rows is a one-off, not a steady state**: iterative deepening caches the
-best move at every depth it passes through, and the TT dump persists anything at depth ≥ 4, so a
-depth-10 run repopulates depths 1–9 within minutes. `find_best_move`'s `time_limit` is also a trap
-here — a search cut short still stores its result under the *requested* depth, so time-limited
-training would file shallow answers as deep ones.
+**One search writes one entry.** A depth-10 search leaves exactly one `book_move` row per rank plus
+one `position` row, and nothing else. The per-iteration stores and the TT dump that used to fill
+~97% of the DB with rows no depth-10 probe could accept are both gone — the TT dump for good, since
+its interior nodes have no completed root depth behind their scores and no position to write a FEN
+from. `depth` is the depth that **completed**: the mate break and `time_limit` both exit the
+iterative-deepening loop early, and a result salvaged from an aborted iteration is returned to the
+caller but never filed. Forced moves (one legal reply) are answered without being stored — nothing
+was searched.
 
 ## Tests
 
@@ -87,18 +99,20 @@ training would file shallow answers as deep ones.
 Tests are slow by design — several play full AI-vs-AI games. Prefer running a single test while
 iterating.
 
-**No test may write to the repo-root `move_cache.db`** — that file is the live training cache, and
-`test_nightly.py` drops and recreates the table. `DB_PATH` in `cache.rs` is the relative string
-`"move_cache.db"` with no override, so the only seam is the CWD: `tests/cache_isolation.py` gives an
-`isolated_cache_db()` context manager and an `IsolatedCacheDB` TestCase base that run a test in a
-throwaway directory and reload the real cache afterwards (the Rust cache is process-global, so a
-test that skipped the reload would leave its scratch rows to be written back by a later test).
-Anything the NN work adds — replay buffers, checkpoints — goes under a configurable path outside the
-repo root for the same reason. A full `pytest tests/ -q` should leave `move_cache.db` byte-identical;
-`md5sum` it before and after if you touch this.
+**No test may write to the repo-root `book.db`** — that file is the live book, and `test_nightly.py`
+drops and recreates its tables. `DB_PATH` in `cache.rs` is the relative string `"book.db"` with no
+override, so the only seam is the CWD: `tests/cache_isolation.py` gives an `isolated_cache_db()`
+context manager and an `IsolatedCacheDB` TestCase base that run a test in a throwaway directory and
+reload the real book afterwards (the Rust book is process-global, so a test that skipped the reload
+would leave its scratch rows to be written back by a later test). **Never call `ai.setup_db()`
+outside that isolation** — it builds the schema in the CWD, and after a `SCHEMA_VERSION` bump it
+drops what is there first. Anything the NN work adds — replay buffers, checkpoints — goes under a
+configurable path outside the repo root for the same reason. A full `pytest tests/ -q` must create
+no repo-root `book.db` at all; check with `ls` before and after.
 
-Rust has no test suite; `cargo build --release` inside `engine_rs/` only checks that it compiles —
-use `maturin develop --release` for anything you intend to run.
+Rust has a small unit suite (`fen.rs`): `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --release`
+inside `engine_rs/`. Everything else is tested from Python, and `cargo build --release` only checks
+that it compiles — use `maturin develop --release` for anything you intend to run.
 
 ## Architecture
 
@@ -144,7 +158,9 @@ other region, which is what stops clicks reaching the buttons underneath it.
 
 **`ai.py` is a thin shim, not the AI.** It exists so `gui.py`, `play_online.py`, and the training
 scripts keep a stable Python API while all real work happens in Rust. Its module-level `move_cache`
-and `tt` dicts are vestigial — the Rust side owns both caches.
+and `tt` dicts are vestigial — the Rust side owns both the book and the TT; use `ai.book_size()` for
+a count that is actually true. `_sync_to_rust` rebuilds the Rust state on every call, so anything the
+book records about a position (currently `ply`) has to be copied there or it arrives as a default.
 
 **Move representation** (same tuples on both sides of the PyO3 boundary):
 - normal: `((r1, f1), (r2, f2), promotion_char_or_None)`
@@ -153,11 +169,55 @@ and `tt` dicts are vestigial — the Rust side owns both caches.
 Coordinates are `(row, file)` with **row 0 = rank 6** (top). `utils.coords_to_algebraic` /
 `algebraic_to_coords` are the only correct converters; don't hand-roll the flip.
 
-**Caching.** `engine_rs/src/cache.rs` persists a `(position hash, depth) → best move` table to
-`move_cache.db` (SQLite, repo root, gitignored) and there is a separate in-memory transposition table
-per search. The persistent cache is process-global and filled as you search, so **searching the same
-(position, depth) twice in one process is a cache hit that reports ~0s** — the reason `bench/` forks a
-fresh process per measurement.
+**The opening book.** `engine_rs/src/cache.rs` persists two tables to `book.db` (SQLite, repo root,
+gitignored); there is a separate in-memory transposition table per search, which is never persisted.
+
+```sql
+book_move(hash, rank, move, score, depth, eval_version)   -- PK (hash, rank); rank 1 = best
+position(hash, fen, ply)                                  -- PK hash
+```
+
+- `book_move` is the hot path: everything a probe needs is in the row, so the runtime lookup
+  **never joins `position`**. A probe rejects a row shallower than the depth asked for, one written
+  under a different `eval_version`, and any move that is not legal in the position (a collision or a
+  stale row). Deeper-than-requested rows are accepted — same question, more evidence.
+- `position` is what makes a hash mean something: the hash is one-way, so without a FEN a row can
+  never be re-opened or expanded from. Written `INSERT OR IGNORE`; a **differing FEN on an existing
+  hash is a Zobrist collision** and is logged as loudly as a log line can be. `ply` is
+  path-dependent, so the minimum ever seen wins.
+- `eval_version` is `EVAL_VERSION` in `eval.rs` and is **bumped by hand whenever an eval constant
+  changes**. Nothing detects a stale value; bumping invalidates the book in place rather than
+  dropping it.
+- `SCHEMA_VERSION` lives in `PRAGMA user_version`. A mismatch drops and rebuilds both tables, which
+  replaced the old "no depth column → DROP TABLE" column-sniffing.
+- The book is process-global and filled as you search, so **searching the same position twice in one
+  process is a hit that reports ~0s** — the reason `bench/` forks a fresh process per measurement and
+  calls `find_best_move_with_score` (a plain single-PV search) rather than asking for two moves.
+
+`move_cache.db` is the **dead** predecessor: nothing reads or writes it any more. Its hashes cannot
+be turned back into FENs, and ~97% of its rows were unreachable anyway, so none of it was migratable.
+Delete it when you want the disk space back.
+
+**FEN.** `engine_rs/src/fen.rs` carries exactly what the Zobrist hash reads — board, side to move,
+both hands, promoted squares — and nothing path-dependent. That equivalence is the point:
+`from_fen(to_fen(gs))` must hash back to `gs.hash`, which `tests/test_fen.py` asserts over random
+games. Crazyhouse conventions at 6x6: `2bnrk/5p/6/6/P5/KRNB2[] w`, hands in brackets (uppercase
+White), `~` marking a promoted piece, ranks top row first. Exposed as `ai.to_fen` / `ai.from_fen`.
+
+**MultiPV.** `find_best_move(..., return_top_n=K)` with `K > 1` runs a full-window search of the top
+K root moves at the final depth, which is the only way ranks 2+ get scores rather than fail-low
+bounds — read those off an ordinary alpha-beta search and the book fills with numbers that mean
+nothing. There is no ply or depth gate: the caller decides where to spend. It is not free. Measured
+at depth 9 against the same search asked for one move: **K=2 costs 2.4x from the initial position
+and 3.0x six plies in; K=3 costs 4.4x and 3.8x.** Self-play pays this on every move — that is what
+made `choose_move_with_exploration`'s 20% exploration start working after never having run.
+
+"Exact" here means procedural: never a fail-low or fail-high bound. It is *not* a claim that the
+number is the true depth-N minimax value. Score every root move with its own independent search and
+the ranking comes out different — and so does the ordinary single-PV root, which disagrees with both.
+That drift is the engine's, not the book's: it comes from null-move pruning returning a hard `beta`
+while the TT store site classifies flags against the original window (the same hazard documented on
+`search_worker`). Fixing it is a search change needing its own bench and parity pass.
 
 **Parallelism policy — deliberate, don't "fix" it.** Root-parallel search
 (`minimax_parallel` in `search.rs`) is **off by default**. Self-play training explicitly passes
@@ -170,8 +230,8 @@ iterative-deepening depth that gets split, default 3).
 ## Benchmarking the engine
 
 `bench/` measures the search honestly: one fresh `venv/bin/python` subprocess per measurement, never
-loads the on-disk move cache, reduces repeats with **min** (background load is additive noise), and
-flags cells measured under high load average.
+loads the on-disk book, reduces repeats with **min** (background load is additive noise), and flags
+cells measured under high load average.
 
 ```bash
 ./venv/bin/python bench/run_bench.py --depths 6,7,8 --repeats 3 --modes seq,par --out bench/mine.json
@@ -179,7 +239,8 @@ flags cells measured under high load average.
 ./venv/bin/python bench/gen_positions.py     # regenerate bench/positions.json
 ```
 
-Positions are stored as replayed move lists (there is no FEN parser here). In `compare.py`, best-move
+Positions are stored as replayed move lists, which predates `fen.rs` — either works now. In
+`compare.py`, best-move
 **agreement** is the headline, not speed: a parallel run returning a different move with a different
 score is a regression regardless of how fast it was, and exits non-zero.
 
@@ -202,9 +263,13 @@ a full measure → propose → implement-in-worktrees → verify pass over this 
   `nn/model.py` sized the action space as `board_size**4`, which cannot express a drop or a promotion
   choice, and `nn/mcts.py` never negated the value between alternating players. Anything neural starts
   from the Rust `GameState`, not from those files (`git show 709f963:nn/model.py` if you want them back).
+- `move_cache.db` in the repo root is dead weight from before the book (see **The opening book**);
+  nothing reads it. `precalc_openings.py` still fills rank 1 only — it never asks for alternatives.
 - `config.py`'s eval constants (`CENTER_BONUS`, `KING_SAFETY_BONUS`, `PIECE_VALUES` in `pieces.py`, …)
   are dead weight from the pre-Rust era — the numbers that actually decide moves are the `const`s at
-  the top of `engine_rs/src/eval.rs`. Editing the Python ones changes nothing.
+  the top of `engine_rs/src/eval.rs`. Editing the Python ones changes nothing — and editing the Rust
+  ones means bumping `EVAL_VERSION` in the same file, or the book keeps serving scores from the
+  evaluation you just replaced.
 - `docs/ARCHITECTURE.md` is stale and wrong (claims bitboards; the board is a list of chars).
   `docs/evaluation_strategy.md` and the README are accurate.
 - Console output across the Python layer is heavily print-based and partly emoji-formatted; the bot

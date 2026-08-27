@@ -2,6 +2,7 @@ mod types;
 mod zobrist;
 mod gamestate;
 mod eval;
+mod fen;
 mod search;
 mod cache;
 
@@ -15,12 +16,12 @@ use std::sync::Mutex;
 use types::*;
 use gamestate::GameState as RustGameState;
 
-// Global move cache (thread-safe)
+// The opening book, process-global and thread-safe.
 lazy_static::lazy_static! {
-    static ref MOVE_CACHE: Mutex<HashMap<(String, i32), String>> = Mutex::new(HashMap::new());
-    /// Cache keys written since the last save. Lets save_move_cache_to_db push only
-    /// the new entries instead of the whole cache — see cache::save_move_cache_entries.
-    static ref DIRTY_KEYS: Mutex<Vec<(String, i32)>> = Mutex::new(Vec::new());
+    static ref BOOK: Mutex<cache::Book> = Mutex::new(HashMap::new());
+    /// Position hashes written since the last save. Lets save_move_cache_to_db push only
+    /// the new entries instead of rewriting the whole book — see cache::save_book_entries.
+    static ref DIRTY_KEYS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 }
 
 /// Convert a Python move tuple to our internal Move
@@ -441,6 +442,11 @@ impl PyGameState {
     #[getter]
     fn ply(&self) -> u32 { self.inner.ply }
 
+    /// Settable because `ai._sync_to_rust` builds a fresh Rust state per search: without
+    /// this, every book row would claim the position first occurs at ply 0.
+    #[setter]
+    fn set_ply(&mut self, v: u32) { self.inner.ply = v; }
+
     #[getter]
     fn ply_limit(&self) -> u32 { self.inner.ply_limit }
 
@@ -487,6 +493,12 @@ impl PyGameState {
             let f: usize = tup.get_item(1)?.extract()?;
             self.inner.promoted_pieces |= 1u64 << sq(r, f);
         }
+        // Promoted squares are hashed (zobrist::get_position_hash), so skipping this
+        // left every position synced from Python with a promoted piece carrying a hash
+        // that ignored it -- and the book is keyed by that hash. Caught by
+        // tests/test_fen.py: the FEN written beside such an entry did not hash back to
+        // the row it belonged to.
+        self.inner.hash = self.inner.compute_hash();
         Ok(())
     }
 
@@ -539,34 +551,64 @@ impl PyGameState {
 }
 
 // Module-level AI functions
+
+/// `return_top_n == 1` gives back the bare move tuple, as the GUI, the bot and the
+/// training scripts all expect. Anything higher gives back a list of `(move, score)`
+/// ranked best-first for the side to move, and asks the engine for a MultiPV search so
+/// those scores are real values rather than alpha-beta bounds — this is the call that
+/// `self_play.choose_move_with_exploration` has always made and never got a second move
+/// out of.
 #[pyfunction]
 #[pyo3(signature = (gs, depth=None, return_top_n=None, time_limit=None, parallel=None))]
 fn find_best_move(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, return_top_n: Option<i32>, time_limit: Option<f64>, parallel: Option<bool>) -> PyResult<PyObject> {
     let d = depth.unwrap_or(6);
     let top_n = return_top_n.unwrap_or(1);
-    
-    let (best, score) = py.allow_threads(|| {
-        let mut cache = MOVE_CACHE.lock().unwrap();
+
+    let ranked = py.allow_threads(|| {
+        let mut book = BOOK.lock().unwrap();
         let mut dirty = Vec::new();
-        let res = search::find_best_move(&mut gs.inner, d, &mut cache, &mut dirty, time_limit, parallel);
+        let res = search::find_best_move(&mut gs.inner, d, top_n, &mut book, &mut dirty, time_limit, parallel);
         DIRTY_KEYS.lock().unwrap().append(&mut dirty);
         res
     });
-    
-    if top_n == 1 {
-        Ok(rust_move_to_py(py, best))
-    } else {
-        // Return list of (move, score)
-        let list = PyList::empty(py);
-        if !best.is_null() {
-            let tup = PyTuple::new(py, &[
-                rust_move_to_py(py, best),
-                score.into_pyobject(py)?.into_any().unbind(),
-            ])?;
-            list.append(tup)?;
-        }
-        Ok(list.into())
+
+    if top_n <= 1 {
+        let best = ranked.first().map(|&(m, _)| m).unwrap_or(Move::NULL);
+        return Ok(rust_move_to_py(py, best));
     }
+
+    let list = PyList::empty(py);
+    for &(m, score) in &ranked {
+        let tup = PyTuple::new(py, &[
+            rust_move_to_py(py, m),
+            score.into_pyobject(py)?.into_any().unbind(),
+        ])?;
+        list.append(tup)?;
+    }
+    Ok(list.into())
+}
+
+/// The single-PV search plus its score, without asking for a second rank.
+///
+/// `bench/` wants exactly this: `return_top_n=2` would report a score, but it would also
+/// switch the engine into MultiPV and stop measuring the path training actually runs.
+#[pyfunction]
+#[pyo3(signature = (gs, depth=None, time_limit=None, parallel=None))]
+fn find_best_move_with_score(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, time_limit: Option<f64>, parallel: Option<bool>) -> PyResult<PyObject> {
+    let d = depth.unwrap_or(6);
+    let ranked = py.allow_threads(|| {
+        let mut book = BOOK.lock().unwrap();
+        let mut dirty = Vec::new();
+        let res = search::find_best_move(&mut gs.inner, d, 1, &mut book, &mut dirty, time_limit, parallel);
+        DIRTY_KEYS.lock().unwrap().append(&mut dirty);
+        res
+    });
+    let (best, score) = ranked.first().copied().unwrap_or((Move::NULL, 0));
+    let tup = PyTuple::new(py, &[
+        rust_move_to_py(py, best),
+        score.into_pyobject(py)?.into_any().unbind(),
+    ])?;
+    Ok(tup.into())
 }
 
 /// Turn the root-level parallel search on or off for this process.
@@ -598,15 +640,12 @@ fn get_position_hash(gs: &PyGameState) -> String {
     gs.inner.hash.to_string()
 }
 
+/// Loads the book from disk into this process. Names kept for API compatibility.
 #[pyfunction]
 fn load_move_cache_from_db() {
-    let loaded = cache::load_move_cache();
-    // Tell the search how deep the DB goes, so its cache probe knows where to start.
-    if let Some(&max_depth) = loaded.keys().map(|(_, d)| d).max() {
-        search::note_cached_depth(max_depth);
-    }
-    let mut cache = MOVE_CACHE.lock().unwrap();
-    *cache = loaded;
+    let loaded = cache::load_book();
+    let mut book = BOOK.lock().unwrap();
+    *book = loaded;
     // Everything just loaded is already on disk.
     DIRTY_KEYS.lock().unwrap().clear();
 }
@@ -614,18 +653,40 @@ fn load_move_cache_from_db() {
 #[pyfunction]
 #[pyo3(signature = (_cache_arg=None))]
 fn save_move_cache_to_db(_py: Python<'_>, _cache_arg: Option<&Bound<'_, PyAny>>) {
-    let cache = MOVE_CACHE.lock().unwrap();
+    let book = BOOK.lock().unwrap();
     let mut dirty = DIRTY_KEYS.lock().unwrap();
     if dirty.is_empty() {
         return;
     }
-    cache::save_move_cache_entries(&cache, &dirty);
+    cache::save_book_entries(&book, &dirty);
     dirty.clear();
 }
 
 #[pyfunction]
 fn setup_db() {
     let _ = cache::setup_db();
+}
+
+/// Number of positions the in-memory book holds.
+#[pyfunction]
+fn book_size() -> usize {
+    BOOK.lock().unwrap().len()
+}
+
+/// Serialize a position to minihouse FEN. See `engine_rs/src/fen.rs` for the format.
+#[pyfunction]
+fn to_fen(gs: &PyGameState) -> String {
+    fen::to_fen(&gs.inner)
+}
+
+/// Parse a minihouse FEN into a fresh GameState. Raises ValueError on malformed input.
+#[pyfunction]
+fn from_fen(py: Python<'_>, s: &str) -> PyResult<PyGameState> {
+    let inner = fen::from_fen(s).map_err(PyValueError::new_err)?;
+    let mut out = PyGameState::new(py);
+    out.inner = inner;
+    out.saved_states_count = 1;
+    Ok(out)
 }
 
 #[pyfunction]
@@ -647,6 +708,7 @@ fn parse_move_string(py: Python<'_>, s: &str) -> PyResult<PyObject> {
 fn minichess_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGameState>()?;
     m.add_function(wrap_pyfunction!(find_best_move, m)?)?;
+    m.add_function(wrap_pyfunction!(find_best_move_with_score, m)?)?;
     m.add_function(wrap_pyfunction!(set_parallel_search, m)?)?;
     m.add_function(wrap_pyfunction!(get_parallel_search, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_position, m)?)?;
@@ -654,6 +716,9 @@ fn minichess_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_move_cache_from_db, m)?)?;
     m.add_function(wrap_pyfunction!(save_move_cache_to_db, m)?)?;
     m.add_function(wrap_pyfunction!(setup_db, m)?)?;
+    m.add_function(wrap_pyfunction!(book_size, m)?)?;
+    m.add_function(wrap_pyfunction!(to_fen, m)?)?;
+    m.add_function(wrap_pyfunction!(from_fen, m)?)?;
     m.add_function(wrap_pyfunction!(is_move_still_legal, m)?)?;
     m.add_function(wrap_pyfunction!(parse_move_string, m)?)?;
     
@@ -661,6 +726,8 @@ fn minichess_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("CHECKMATE_SCORE", eval::CHECKMATE_SCORE)?;
     m.add("STALEMATE_SCORE", eval::STALEMATE_SCORE)?;
     m.add("BOARD_SIZE", BOARD_SIZE)?;
+    m.add("EVAL_VERSION", eval::EVAL_VERSION)?;
+    m.add("SCHEMA_VERSION", cache::SCHEMA_VERSION)?;
     
     Ok(())
 }

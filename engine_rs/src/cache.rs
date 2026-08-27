@@ -1,13 +1,76 @@
+//! The opening book: a `(position hash) -> ranked moves` table on disk.
+//!
+//! This replaces the old `move_cache` table, which stored one row per *(hash, depth)*
+//! and was ~97% junk: iterative deepening filed a row for every depth it passed through
+//! and the transposition-table dump filed internal nodes at depth >= 4, none of which a
+//! depth-10 probe would ever accept. A book row is now the finished product of one
+//! search -- the depth that actually completed, an exact score, and as many ranked
+//! alternatives as the search was asked to produce.
+//!
+//! Two tables, written together in one transaction:
+//!
+//! - `book_move` is the hot path. Everything a probe needs is in the row, so the
+//!   runtime lookup never joins `position`.
+//! - `position` is what makes a hash mean something again. A Zobrist hash is one-way, so
+//!   without a FEN beside it a book entry can never be re-opened, re-searched, or
+//!   expanded from. See `fen.rs`.
+//!
+//! The DB lives in `book.db`, next to (not on top of) the old `move_cache.db`, which
+//! this module no longer reads or writes -- its hashes cannot be turned back into FENs,
+//! so nothing in it was migratable. Delete it when you no longer want the disk space.
+//!
+//! `DB_PATH` is a relative string, so the file is resolved against the process CWD:
+//! workers must run from the repo root, and tests must not (see
+//! `tests/cache_isolation.py`).
+
 use rusqlite::{Connection, params};
 use std::collections::HashMap;
 
-const DB_PATH: &str = "move_cache.db";
+const DB_PATH: &str = "book.db";
 
-/// Opens the cache DB in WAL mode with a generous busy timeout.
+/// Bumped whenever the table definitions below change.
 ///
-/// Both matter when many self-play workers share one `move_cache.db`: WAL keeps
-/// readers off the writer's back, and the timeout makes a concurrent writer wait
-/// its turn instead of failing the transaction outright.
+/// Stored in `PRAGMA user_version`. The old code sniffed the columns of `move_cache`
+/// ("no depth column -> DROP TABLE"), a heuristic that cannot tell a schema this module
+/// has never seen from one it wrote itself. A version integer can.
+pub const SCHEMA_VERSION: i32 = 1;
+
+/// One ranked move for one position. `rank` 1 is the best move.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BookMove {
+    pub rank: i32,
+    /// Python move repr, the same string `search::format_move_repr` produces.
+    pub move_repr: String,
+    /// White-relative and always exact -- never an alpha-beta bound. Ranks 2+ are only
+    /// ever filled from a full-window MultiPV search for that reason.
+    pub score: i32,
+    /// The depth that actually *completed*, not the one that was requested.
+    pub depth: i32,
+    pub eval_version: i32,
+}
+
+/// One position's book entry.
+#[derive(Clone, Debug)]
+pub struct BookEntry {
+    /// Ranked best-first, `rank` ascending and contiguous from 1.
+    pub moves: Vec<BookMove>,
+    /// Set only for entries this process searched; `None` for entries loaded from disk,
+    /// because the load deliberately does not read the `position` table (the hot path
+    /// has no use for a FEN, and loading them would cost memory per row for nothing).
+    pub fen: Option<String>,
+    /// Plies from the initial position. Path-dependent -- the same position can be
+    /// reached by different move orders -- so the DB keeps the minimum ever seen.
+    pub ply: Option<i32>,
+}
+
+/// Hash string -> ranked moves. Process-global in `lib.rs`.
+pub type Book = HashMap<String, BookEntry>;
+
+/// Opens the book DB in WAL mode with a generous busy timeout.
+///
+/// Both matter when many self-play workers share one `book.db`: WAL keeps readers off
+/// the writer's back, and the timeout makes a concurrent writer wait its turn instead of
+/// failing the transaction outright.
 fn open_db() -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open(DB_PATH)?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
@@ -16,127 +79,251 @@ fn open_db() -> Result<Connection, rusqlite::Error> {
     Ok(conn)
 }
 
+fn user_version(conn: &Connection) -> Result<i32, rusqlite::Error> {
+    conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+}
+
+/// Creates the book schema, rebuilding it if the file was written by another version.
+///
+/// A version mismatch drops both tables. That is safe by construction: everything in
+/// them is a pure function of the engine, recomputable by re-searching, and there is no
+/// hand-entered data to lose.
 pub fn setup_db() -> Result<(), rusqlite::Error> {
     let conn = open_db()?;
-    
-    // Check if table exists and has correct schema
-    let has_depth: bool = {
-        let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='move_cache'")?;
-        let exists = stmt.query_map([], |_| Ok(()))?.count() > 0;
-        if exists {
-            let mut info = conn.prepare("PRAGMA table_info(move_cache)")?;
-            let cols: Vec<String> = info.query_map([], |row| row.get::<_, String>(1))?.filter_map(|r| r.ok()).collect();
-            cols.contains(&"depth".to_string())
-        } else {
-            false
-        }
-    };
-    
-    if !has_depth {
-        conn.execute("DROP TABLE IF EXISTS move_cache", [])?;
+
+    let version = user_version(&conn).unwrap_or(0);
+    let has_tables: bool = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('book_move','position')")?
+        .query_map([], |_| Ok(()))?
+        .count()
+        > 0;
+
+    if has_tables && version != SCHEMA_VERSION {
+        eprintln!(
+            "[BOOK] schema version {} != {}, rebuilding {}",
+            version, SCHEMA_VERSION, DB_PATH
+        );
+        conn.execute("DROP TABLE IF EXISTS book_move", [])?;
+        conn.execute("DROP TABLE IF EXISTS position", [])?;
     }
-    
+
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS move_cache (
-            hash TEXT NOT NULL,
-            depth INTEGER NOT NULL,
-            best_move_repr TEXT NOT NULL,
-            PRIMARY KEY (hash, depth)
+        "CREATE TABLE IF NOT EXISTS book_move (
+            hash         TEXT NOT NULL,
+            rank         INTEGER NOT NULL,
+            move         TEXT NOT NULL,
+            score        INTEGER NOT NULL,
+            depth        INTEGER NOT NULL,
+            eval_version INTEGER NOT NULL,
+            PRIMARY KEY (hash, rank)
         )",
         [],
     )?;
-    
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS position (
+            hash TEXT PRIMARY KEY,
+            fen  TEXT NOT NULL,
+            ply  INTEGER
+        )",
+        [],
+    )?;
+
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
 
-pub fn load_move_cache() -> HashMap<(String, i32), String> {
-    let mut cache = HashMap::new();
-    if let Err(e) = setup_db() {
-        eprintln!("Error setting up DB: {}", e);
-        return cache;
+/// Loads `book_move` into memory. Does not touch `position` -- see [`BookEntry::fen`].
+///
+/// Reading never writes. It will not create the file, create the tables, or rebuild a
+/// foreign schema: a missing or unreadable book loads as an empty one and says so. That
+/// is what lets `tests/cache_isolation.py` reload the real book on the way out of a test
+/// without the test suite creating -- or, after a `SCHEMA_VERSION` bump, dropping -- the
+/// live `book.db` in the repo root. Writing is where the schema gets made.
+pub fn load_book() -> Book {
+    let mut book: Book = HashMap::new();
+    if !std::path::Path::new(DB_PATH).exists() {
+        return book;
     }
-    
+
     match open_db() {
         Ok(conn) => {
-            match conn.prepare("SELECT hash, depth, best_move_repr FROM move_cache") {
+            let version = user_version(&conn).unwrap_or(0);
+            if version != SCHEMA_VERSION {
+                eprintln!(
+                    "[BOOK] {} is at schema version {}, not {}; ignoring it until a write rebuilds it",
+                    DB_PATH, version, SCHEMA_VERSION
+                );
+                return book;
+            }
+            match conn.prepare(
+                "SELECT hash, rank, move, score, depth, eval_version
+                 FROM book_move ORDER BY hash, rank",
+            ) {
                 Ok(mut stmt) => {
                     let rows = stmt.query_map([], |row| {
                         Ok((
                             row.get::<_, String>(0)?,
-                            row.get::<_, i32>(1)?,
-                            row.get::<_, String>(2)?,
+                            BookMove {
+                                rank: row.get(1)?,
+                                move_repr: row.get(2)?,
+                                score: row.get(3)?,
+                                depth: row.get(4)?,
+                                eval_version: row.get(5)?,
+                            },
                         ))
                     });
                     if let Ok(rows) = rows {
-                        for row in rows.flatten() {
-                            cache.insert((row.0, row.1), row.2);
+                        for (hash, bm) in rows.flatten() {
+                            book.entry(hash)
+                                .or_insert_with(|| BookEntry {
+                                    moves: Vec::new(),
+                                    fen: None,
+                                    ply: None,
+                                })
+                                .moves
+                                .push(bm);
                         }
                     }
                 }
-                Err(e) => eprintln!("Error preparing query: {}", e),
+                Err(e) => eprintln!("Error preparing book query: {}", e),
             }
-            eprintln!("Loaded {} entries from move cache.", cache.len());
+            eprintln!("Loaded {} positions from the book.", book.len());
         }
-        Err(e) => eprintln!("Error opening DB: {}", e),
+        Err(e) => eprintln!("Error opening book DB: {}", e),
     }
-    cache
+    book
 }
 
-pub fn save_move_cache(cache: &HashMap<(String, i32), String>) {
-    if cache.is_empty() {
-        return;
-    }
-    
-    match open_db() {
-        Ok(conn) => {
-            let tx = conn.unchecked_transaction().ok();
-            let mut count = 0;
-            for ((hash, depth), move_repr) in cache {
-                if conn.execute(
-                    "INSERT OR REPLACE INTO move_cache (hash, depth, best_move_repr) VALUES (?1, ?2, ?3)",
-                    params![hash, depth, move_repr],
-                ).is_ok() {
-                    count += 1;
-                }
-            }
-            if let Some(tx) = tx {
-                let _ = tx.commit();
-            }
-            eprintln!("Saved {} entries to move cache.", count);
-        }
-        Err(e) => eprintln!("Error saving cache: {}", e),
-    }
-}
-
-/// Writes only the given keys back to the DB.
+/// Writes the given positions to disk: their ranked moves and, when known, their FEN.
 ///
-/// `save_move_cache` rewrites every entry the process holds, which is O(cache)
-/// per call — fine for one process, ruinous once twenty self-play workers each
-/// re-send a six-figure cache after every move. Callers that track which keys
-/// they touched should use this instead.
-pub fn save_move_cache_entries(cache: &HashMap<(String, i32), String>, keys: &[(String, i32)]) {
-    if keys.is_empty() {
+/// Both tables go through one connection inside one `BEGIN IMMEDIATE` transaction. With
+/// twenty self-play workers contending for a single write lock, splitting this into two
+/// transactions would double the lock acquisitions for no gain and could leave a
+/// `book_move` row with no `position` row beside it.
+///
+/// `IMMEDIATE` matters in WAL: taking the write lock up front is what stops a
+/// read-then-write transaction from failing with `SQLITE_BUSY_SNAPSHOT` when another
+/// worker commits underneath it.
+pub fn save_book_entries(book: &Book, hashes: &[String]) {
+    if hashes.is_empty() {
         return;
     }
 
-    match open_db() {
-        Ok(conn) => {
-            let tx = conn.unchecked_transaction().ok();
-            let mut count = 0;
-            for key in keys {
-                let Some(move_repr) = cache.get(key) else { continue };
-                if conn.execute(
-                    "INSERT OR REPLACE INTO move_cache (hash, depth, best_move_repr) VALUES (?1, ?2, ?3)",
-                    params![key.0, key.1, move_repr],
-                ).is_ok() {
-                    count += 1;
-                }
-            }
-            if let Some(tx) = tx {
-                let _ = tx.commit();
-            }
-            eprintln!("Saved {} new entries to move cache.", count);
+    // A process that searched without ever loading the book -- a bench child, a test,
+    // `precalc_openings.py` on a fresh checkout -- would otherwise reach the INSERTs with
+    // no tables to insert into and lose the whole run's work to an error log.
+    if let Err(e) = setup_db() {
+        eprintln!("Error setting up book DB: {}", e);
+        return;
+    }
+
+    let conn = match open_db() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error opening book DB: {}", e);
+            return;
         }
-        Err(e) => eprintln!("Error saving cache: {}", e),
+    };
+
+    if let Err(e) = conn.execute_batch("BEGIN IMMEDIATE") {
+        eprintln!("Error starting book transaction: {}", e);
+        return;
+    }
+
+    let mut written = 0usize;
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for hash in hashes {
+        if !seen.insert(hash.as_str()) {
+            continue;
+        }
+        let Some(entry) = book.get(hash) else { continue };
+
+        // Replace the whole rank list rather than upserting row by row: a re-search that
+        // returns fewer ranks than last time must not leave the old tail behind, where it
+        // would sit at a rank whose score came from a different search.
+        if let Err(e) = conn.execute("DELETE FROM book_move WHERE hash = ?1", params![hash]) {
+            eprintln!("Error clearing book rows for {}: {}", hash, e);
+            continue;
+        }
+        let mut ok = true;
+        for bm in &entry.moves {
+            if let Err(e) = conn.execute(
+                "INSERT INTO book_move (hash, rank, move, score, depth, eval_version)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![hash, bm.rank, bm.move_repr, bm.score, bm.depth, bm.eval_version],
+            ) {
+                eprintln!("Error writing book row for {}: {}", hash, e);
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            written += 1;
+        }
+
+        let Some(fen) = &entry.fen else { continue };
+        write_position(&conn, hash, fen, entry.ply);
+    }
+
+    if let Err(e) = conn.execute_batch("COMMIT") {
+        eprintln!("Error committing book transaction: {}", e);
+        let _ = conn.execute_batch("ROLLBACK");
+        return;
+    }
+    eprintln!("Saved {} positions to the book.", written);
+}
+
+/// Inserts the `position` row for `hash`, or reconciles it with the row already there.
+///
+/// Two things can differ on an existing row. A differing **FEN** means two distinct
+/// positions hashed to the same 64-bit value -- a Zobrist collision, which silently
+/// corrupts every book entry involved, so it is logged as loudly as a log line can be
+/// rather than swallowed. A differing **ply** is ordinary: the position was reached by a
+/// different move order. The minimum wins, because that is how early the position can
+/// actually appear in a game, which is what a book-expansion frontier wants to sort by.
+fn write_position(conn: &Connection, hash: &str, fen: &str, ply: Option<i32>) {
+    let inserted = conn.execute(
+        "INSERT OR IGNORE INTO position (hash, fen, ply) VALUES (?1, ?2, ?3)",
+        params![hash, fen, ply],
+    );
+    match inserted {
+        Ok(1) => return, // fresh row, nothing to reconcile
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("Error writing position row for {}: {}", hash, e);
+            return;
+        }
+    }
+
+    let existing: Result<(String, Option<i32>), _> = conn.query_row(
+        "SELECT fen, ply FROM position WHERE hash = ?1",
+        params![hash],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    );
+    let Ok((existing_fen, existing_ply)) = existing else { return };
+
+    if existing_fen != fen {
+        eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        eprintln!("!! ZOBRIST COLLISION on hash {}", hash);
+        eprintln!("!!   stored: {}", existing_fen);
+        eprintln!("!!   new:    {}", fen);
+        eprintln!("!! Both positions share one book entry; its moves are unsound for");
+        eprintln!("!! at least one of them. Keeping the stored FEN.");
+        eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        return;
+    }
+
+    let improves = match (ply, existing_ply) {
+        (Some(new), Some(old)) => new < old,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    if improves {
+        if let Err(e) = conn.execute(
+            "UPDATE position SET ply = ?1 WHERE hash = ?2",
+            params![ply, hash],
+        ) {
+            eprintln!("Error updating ply for {}: {}", hash, e);
+        }
     }
 }

@@ -5,6 +5,16 @@ use crate::gamestate::GameState;
 // Tuned for: small board, drops dominate tactics, pawn promo race is key,
 // king safety is life-or-death, 90s/move allows deep search.
 
+/// Identifies the evaluation that produced a stored score.
+///
+/// **Bump this by hand whenever any constant or term below changes.** Every book row
+/// carries the version it was written under, and a probe refuses rows from any other
+/// one: a score from a different evaluation is not comparable with a fresh one, so
+/// ranking the two together would order the book by which build searched it. Bumping
+/// invalidates the book without dropping it -- old rows are ignored and re-searched in
+/// place. Nothing detects a stale value automatically; that is the point of the comment.
+pub const EVAL_VERSION: i32 = 1;
+
 const CENTER_SQUARES: [usize; 4] = [
     2 * BOARD_SIZE + 2, // (2,2)
     2 * BOARD_SIZE + 3, // (2,3)

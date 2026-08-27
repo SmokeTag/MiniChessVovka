@@ -9,6 +9,9 @@ venv/
 move_cache.db
 move_cache.db.*
 move_cache.db-*
+book.db
+book.db.*
+book.db-*
 
 # Training
 training_log.txt

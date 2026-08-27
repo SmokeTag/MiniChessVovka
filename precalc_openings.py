@@ -187,7 +187,7 @@ def main():
     print(f"✅ PRECALCULATION COMPLETE")
     print(f"   Positions calculated: {total_positions}")
     print(f"   Total time: {total_time:.0f}s ({total_time/60:.1f} min)")
-    print(f"   Cache size: see move_cache.db")
+    print(f"   Book size: see book.db")
     print("═" * 60)
 
 

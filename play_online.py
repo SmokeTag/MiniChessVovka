@@ -2,7 +2,7 @@
 """
 MiniChess Online Bot — plays minihouse on chess.com via Chrome + Playwright.
 
-Uses the trained move_cache.db and AI engine from the MiniChess project.
+Uses the trained opening book (book.db) and AI engine from the MiniChess project.
 
 Prerequisites:
     pip install -r requirements.txt
@@ -1501,14 +1501,12 @@ def play_game(page):
     # Save game log for ALL games (not just losses)
     _save_game_log(game_log, our_color, result_text, moves_made, result_label)
     
-    # Save accumulated cache to local DB
+    # Flush this game's searches to the opening book
     try:
-        cache = ai_module.move_cache
-        before = len(cache)
-        ai_module.save_move_cache_to_db(cache)
-        print(f"   💾 Saved {before} cache entries to move_cache.db")
+        ai_module.save_move_cache_to_db()
+        print(f"   💾 Book now holds {ai_module.book_size()} positions (book.db)")
     except Exception as e:
-        print(f"   ⚠️  Cache save failed: {e}")
+        print(f"   ⚠️  Book save failed: {e}")
     
     # Dismiss game-over modal if present
     time.sleep(2)

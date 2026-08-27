@@ -46,10 +46,8 @@ def engine_move(gs, depth=GEN_DEPTH):
     import ai
     import minichess_engine as rs
     rust_gs = ai._sync_to_rust(gs)
-    out = rs.find_best_move(rust_gs, depth, 2, None, False)
-    if not out:
-        return None
-    return out[0][0]
+    move, _score = rs.find_best_move_with_score(rust_gs, depth, None, False)
+    return move
 
 
 def play(gs, move):

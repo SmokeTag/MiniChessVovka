@@ -346,7 +346,7 @@ def run_self_play_training(num_games: int = None, depth: int = 6, exploration_ra
             print(f"  Move limit: {stats['max_moves']}")
             print(f"  Average moves per game: {stats['total_moves']/stats['total_games']:.1f}")
             print(f"  Average game time: {stats['total_time']/stats['total_games']:.1f}s")
-            print(f"  Cache size: {len(ai.move_cache)} positions")
+            print(f"  Book size: {ai.book_size()} positions")
             print("-"*60)
             
             if result['result'] == 'interrupted':
@@ -382,7 +382,7 @@ def run_self_play_training(num_games: int = None, depth: int = 6, exploration_ra
             print(f"  Average moves: {stats['total_moves']/stats['total_games']:.1f}")
             print(f"  Average game time: {stats['total_time']/stats['total_games']:.1f}s")
             print(f"  Total moves: {stats['total_moves']}")
-        print(f"\nCache size: {len(ai.move_cache)} positions")
+        print(f"\nBook size: {ai.book_size()} positions")
         print("="*60)
 
 
