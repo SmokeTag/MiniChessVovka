@@ -7,7 +7,7 @@ That is not paranoia: find_best_move consults a process-global MOVE_CACHE keyed
 by (position hash, depth) and fills it as it searches, so a second search of the
 same (position, depth) inside one process is a cache hit and reports ~0s. One
 process = one search = one honest number. The child never calls
-load_move_cache_from_db(), so the on-disk move_cache.db is never consulted or
+load_move_cache_from_db(), so the on-disk book.db is never consulted or
 written.
 
 Modes:
@@ -82,10 +82,10 @@ def run_child(args):
 
     # Time the engine call only: no Python move generation, no state sync.
     start = time.perf_counter()
-    out = rs.find_best_move(rust_gs, args.depth, 2, None, parallel)
+    # find_best_move_with_score, not return_top_n=2: asking for a second rank would
+    # switch the engine into a MultiPV search and stop measuring the path training runs.
+    best_move, score = rs.find_best_move_with_score(rust_gs, args.depth, None, parallel)
     seconds = time.perf_counter() - start
-
-    best_move, score = (out[0][0], out[0][1]) if out else (None, None)
     emit({
         "position": args.position,
         "depth": args.depth,

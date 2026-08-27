@@ -131,7 +131,7 @@ def update_progress(stats, training_start_time):
         
         f.write(f"Uptime: {hours}h {minutes}min\n")
         f.write(f"Total games: {stats['total_games']}\n")
-        f.write(f"Cache size: {len(ai.move_cache)} positions\n\n")
+        f.write(f"Book size: {ai.book_size()} positions\n\n")
         
         if stats['total_games'] > 0:
             f.write("Results:\n")
@@ -444,7 +444,7 @@ def run_self_play_training(num_games: int = None, depth: int = 5, exploration_ra
     # Load the cache from the DB
     log_message("\nLoading the move cache from the database...")
     ai.load_move_cache_from_db()
-    log_message(f"Loaded {len(ai.move_cache)} positions from the cache")
+    log_message(f"Loaded {ai.book_size()} positions from the book")
     
     stats = {
         'total_games': 0,
@@ -504,7 +504,7 @@ def run_self_play_training(num_games: int = None, depth: int = 5, exploration_ra
             log_message(f"  Move limit: {stats['max_moves']}")
             log_message(f"  Average moves per game: {stats['total_moves']/stats['total_games']:.1f}")
             log_message(f"  Average game time: {stats['total_time']/stats['total_games']:.1f}s")
-            log_message(f"  Cache size: {len(ai.move_cache)} positions")
+            log_message(f"  Book size: {ai.book_size()} positions")
             log_message("-"*60)
             
             # Update the progress file
@@ -543,7 +543,7 @@ def run_self_play_training(num_games: int = None, depth: int = 5, exploration_ra
             log_message(f"  Average moves: {stats['total_moves']/stats['total_games']:.1f}")
             log_message(f"  Average game time: {stats['total_time']/stats['total_games']:.1f}s")
             log_message(f"  Total moves: {stats['total_moves']}")
-        log_message(f"\nCache size: {len(ai.move_cache)} positions")
+        log_message(f"\nBook size: {ai.book_size()} positions")
         log_message("="*60)
         
         # Final progress update

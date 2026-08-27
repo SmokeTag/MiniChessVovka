@@ -1,5 +1,5 @@
 #!/bin/bash
-# Snapshot of the self-play workers and the move cache.
+# Snapshot of the self-play workers and the opening book.
 
 set -u
 cd "$(dirname "$0")" || exit 1
@@ -16,10 +16,18 @@ echo "Load average:   $(cut -d' ' -f1-3 /proc/loadavg)"
 echo
 
 ./venv/bin/python - <<'PY'
-import sqlite3
-c = sqlite3.connect("file:move_cache.db?mode=ro", uri=True)
-total = c.execute("select count(*) from move_cache").fetchone()[0]
-print(f"move_cache.db: {total} positions")
-for depth, n in c.execute("select depth, count(*) from move_cache group by depth order by depth"):
+import os, sqlite3
+if not os.path.exists("book.db"):
+    print("book.db: not created yet")
+    raise SystemExit
+c = sqlite3.connect("file:book.db?mode=ro", uri=True)
+positions = c.execute("select count(*) from position").fetchone()[0]
+rows = c.execute("select count(*) from book_move").fetchone()[0]
+print(f"book.db: {positions} positions, {rows} ranked moves")
+for depth, n in c.execute(
+    "select depth, count(*) from book_move where rank = 1 group by depth order by depth"
+):
     print(f"  depth {depth:>2}: {n}")
+multi = c.execute("select count(*) from book_move where rank > 1").fetchone()[0]
+print(f"  alternatives (rank > 1): {multi}")
 PY

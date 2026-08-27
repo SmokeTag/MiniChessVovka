@@ -1,9 +1,9 @@
 #!/bin/bash
-# Run N independent self-play workers to fill move_cache.db.
+# Run N independent self-play workers to fill the opening book (book.db).
 #
 # Each search is single-threaded on purpose (see CLAUDE.md): throughput comes from
 # many concurrent games, not from parallelising one search. Every worker is its own
-# process with its own in-memory cache; they share move_cache.db, which is in WAL
+# process with its own in-memory book; they share book.db, which is in WAL
 # mode and only ever receives the entries a worker newly computed.
 #
 #   ./train_parallel.sh                  # 20 workers at depth 10
@@ -42,7 +42,7 @@ echo "Self-play: $WORKERS workers, depth $DEPTH"
 echo "  exploration:   $EXPLORATION"
 echo "  random plies:  $RANDOM_PLIES"
 echo "  logs:          $LOG_DIR/worker-N.log"
-echo "  database:      move_cache.db"
+echo "  database:      book.db"
 echo "=================================="
 
 for i in $(seq 1 "$WORKERS"); do

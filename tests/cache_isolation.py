@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Keep the test suite off the live `move_cache.db`.
+"""Keep the test suite off the live `book.db`.
 
-`DB_PATH` in `engine_rs/src/cache.rs` is the hardcoded relative string
-"move_cache.db", so every Rust cache call resolves it against the process CWD and
-there is no way to override the path. A test that creates, drops or writes the
-table therefore hits the repo-root DB -- the live self-play cache -- unless it
-first moves the CWD somewhere disposable. `test_nightly.py` used to drop and
-recreate the table in place, so a full pytest run silently destroyed training
-data; `test_e2e.py` used to file its scratch searches into it.
+`DB_PATH` in `engine_rs/src/cache.rs` is the hardcoded relative string "book.db",
+so every Rust book call resolves it against the process CWD and there is no way to
+override the path. A test that creates, drops or writes the tables therefore hits
+the repo-root DB -- the live opening book -- unless it first moves the CWD
+somewhere disposable. `test_nightly.py` used to drop and recreate the table in
+place, so a full pytest run silently destroyed training data; `test_e2e.py` used
+to file its scratch searches into it.
 
 chdir is the only seam available. Use it as a context manager for a single test,
 or subclass `IsolatedCacheDB` for a whole TestCase.
@@ -28,7 +28,7 @@ import ai
 
 @contextlib.contextmanager
 def isolated_cache_db():
-    """Run the block in a throwaway CWD, so it gets its own move_cache.db."""
+    """Run the block in a throwaway CWD, so it gets its own book.db."""
     prev_cwd = os.getcwd()
     tmp_dir = tempfile.mkdtemp(prefix="minichess-cache-test-")
     try:
@@ -37,16 +37,17 @@ def isolated_cache_db():
         # chdir ever stops taking effect.
         if os.path.realpath(os.getcwd()) == os.path.realpath(REPO_ROOT):
             raise RuntimeError(
-                "cache tests must not run in the repo root -- they drop the move_cache table"
+                "cache tests must not run in the repo root -- they drop the book tables"
             )
         yield tmp_dir
     finally:
         os.chdir(prev_cwd)
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        # The Rust move cache is process-global: the block leaves it holding only
-        # its own scratch rows. Reload the real cache so a later test in the same
+        # The Rust book is process-global: the block leaves it holding only its
+        # own scratch rows. Reload the real book so a later test in the same
         # pytest session does not write that scratch state back over the
-        # repo-root DB.
+        # repo-root DB. The reload is read-only (cache::load_book), so it cannot
+        # create or rebuild the live book.db either.
         ai.load_move_cache_from_db()
 
 

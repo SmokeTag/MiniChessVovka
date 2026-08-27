@@ -5,22 +5,11 @@ use std::time::Instant;
 
 use crate::types::*;
 use crate::gamestate::GameState;
+use crate::cache::{Book, BookEntry, BookMove};
 use crate::eval::{evaluate_position, CHECKMATE_SCORE, STALEMATE_SCORE};
 use crate::zobrist;
 
 const MAX_QUIESCENCE_DEPTH: i32 = 4;
-
-/// Deepest entry the persistent move cache is known to hold, which is where `probe_move_cache`
-/// starts its walk. Set from the DB when it is loaded and raised by every insert, so a run at
-/// depth 12 or 16 widens the probe by itself — no constant to keep in sync. 0 means nothing is
-/// cached yet, which makes the probe a no-op.
-static MAX_CACHED_DEPTH: AtomicI32 = AtomicI32::new(0);
-
-/// Record that the cache now holds an entry at `depth`. Callers that fill `move_cache` from
-/// outside a search (the DB load) must call this, or the probe will not look that deep.
-pub fn note_cached_depth(depth: i32) {
-    MAX_CACHED_DEPTH.fetch_max(depth, Ordering::Relaxed);
-}
 
 // Root-level parallel search is a runtime knob, not a compile-time constant.
 // Default is OFF: self-play training runs many independent games side by side across
@@ -650,7 +639,9 @@ fn minimax_parallel(
     depth: i32,
     ss: &mut SearchState,
 ) -> (Move, i32, Vec<(Move, i32)>) {
-    let mut legal_moves = gs.get_legal_moves_vec();
+    // Root move ordering, same keys as minimax_ab: TT move, then killers, then mvv/lva.
+    // Without this the baseline move is arbitrary and every scout fails high.
+    let legal_moves = ordered_root_moves(gs, depth, ss);
     if legal_moves.is_empty() {
         return (Move::NULL, 0, vec![]);
     }
@@ -659,26 +650,6 @@ fn minimax_parallel(
     let deadline = ss.deadline;
     let neg_inf = i32::MIN + 1;
     let inf = i32::MAX - 1;
-
-    // Root move ordering, same keys as minimax_ab: TT move, then killers, then mvv/lva.
-    // Without this the baseline move is arbitrary and every scout fails high.
-    let tt_best = ss.tt_get(gs.hash).map(|e| e.best_move).unwrap_or(Move::NULL);
-    let killers = ss.killer_moves.get(&depth).cloned().unwrap_or([Move::NULL; 2]);
-    let mut scored: Vec<(Move, i32)> = legal_moves
-        .iter()
-        .map(|&m| {
-            let s = if !tt_best.is_null() && m == tt_best {
-                1_000_000
-            } else if m == killers[0] || m == killers[1] {
-                50_000
-            } else {
-                mvv_lva_score(gs, m, ss)
-            };
-            (m, s)
-        })
-        .collect();
-    scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-    legal_moves = scored.into_iter().map(|(m, _)| m).collect();
 
     // Baseline: full-window search of the best-ordered move, in the root's own state so
     // it sees the whole transposition table — byte for byte what the sequential root does.
@@ -809,94 +780,282 @@ fn minimax_parallel(
     (best_move, best_score, all_results)
 }
 
-/// The one way to write the persistent cache. An entry that misses `dirty` never reaches the
-/// DB; one that misses `note_cached_depth` is invisible to `probe_move_cache`. Going through
-/// here keeps both true.
-fn cache_store(
-    move_cache: &mut HashMap<(String, i32), String>,
-    dirty: &mut Vec<(String, i32)>,
+/// The one way to write the book. An entry that misses `dirty` never reaches the DB, so
+/// every insert goes through here.
+///
+/// Called once per search, with the finished ranked list. Nothing else writes: no row
+/// per iterative-deepening iteration (a depth-10 probe would reject all nine of them)
+/// and no transposition-table dump (those are interior nodes, with no FEN to store
+/// beside them and no completed root depth behind their scores).
+fn book_store(
+    book: &mut Book,
+    dirty: &mut Vec<String>,
     pos_hash_str: &str,
-    depth: i32,
-    m: Move,
+    fen: String,
+    ply: Option<i32>,
+    ranked: &[(Move, i32)],
+    depth_completed: i32,
 ) {
-    let key = (pos_hash_str.to_string(), depth);
-    move_cache.insert(key.clone(), format_move_repr(m));
-    dirty.push(key);
-    note_cached_depth(depth);
+    if ranked.is_empty() || depth_completed <= 0 {
+        return;
+    }
+    let moves = ranked
+        .iter()
+        .enumerate()
+        .map(|(i, &(m, score))| BookMove {
+            rank: i as i32 + 1,
+            move_repr: format_move_repr(m),
+            score,
+            depth: depth_completed,
+            eval_version: crate::eval::EVAL_VERSION,
+        })
+        .collect();
+    book.insert(
+        pos_hash_str.to_string(),
+        BookEntry { moves, fen: Some(fen), ply },
+    );
+    dirty.push(pos_hash_str.to_string());
 }
 
-/// Deepest usable persistent-cache entry for `pos_hash_str`, at or above `min_depth`.
+/// The book entry for this position, if it answers the question being asked.
 ///
-/// The cache is keyed by `(hash, depth)`, so finding "any entry at least this deep" means
-/// walking the depths rather than the map — walking the map is O(cache), which is six figures
-/// per search once a worker has been running a while. The walk starts at `MAX_CACHED_DEPTH`,
-/// so it costs nothing beyond the depths that actually exist. Deeper entries win: they came
-/// from a search that saw strictly more. A row whose move is not legal in this position is a
-/// hash collision (or a stale schema) and is skipped rather than trusted.
-fn probe_move_cache(
+/// Rejects, in order: a shallower search than requested (a weaker answer than the one we
+/// are about to run), a score written by a different evaluation (`eval_version`), fewer
+/// ranks than the caller wants, and any move that is not legal here -- the last being a
+/// hash collision or a stale row, which is skipped rather than trusted.
+///
+/// Deeper-than-requested entries are kept: they answer the same question with strictly
+/// more evidence. This reads only `book_move`; the `position` table is never joined on
+/// the hot path.
+fn probe_book(
     gs: &mut GameState,
-    move_cache: &HashMap<(String, i32), String>,
+    book: &Book,
     pos_hash_str: &str,
     min_depth: i32,
-) -> Option<(Move, i32)> {
-    let max_depth = MAX_CACHED_DEPTH.load(Ordering::Relaxed);
-    if min_depth > max_depth {
+    want_ranks: usize,
+) -> Option<(Vec<(Move, i32)>, i32)> {
+    let entry = book.get(pos_hash_str)?;
+    if entry.moves.len() < want_ranks {
         return None;
     }
-    let mut legal: Option<Vec<Move>> = None;
-    for d in (min_depth..=max_depth).rev() {
-        let Some(cached_repr) = move_cache.get(&(pos_hash_str.to_string(), d)) else { continue };
-        let Some(m) = parse_move_repr(cached_repr) else { continue };
-        // Only pay for move generation once we actually have a candidate to validate.
-        let legal = legal.get_or_insert_with(|| gs.get_legal_moves_vec());
-        if legal.contains(&m) {
-            return Some((m, d));
-        }
+    let head = &entry.moves[..want_ranks];
+    if head
+        .iter()
+        .any(|bm| bm.depth < min_depth || bm.eval_version != crate::eval::EVAL_VERSION)
+    {
+        return None;
     }
-    None
+
+    let legal = gs.get_legal_moves_vec();
+    let mut ranked = Vec::with_capacity(head.len());
+    for bm in head {
+        let m = parse_move_repr(&bm.move_repr)?;
+        if !legal.contains(&m) {
+            return None;
+        }
+        ranked.push((m, bm.score));
+    }
+    let depth = head.iter().map(|bm| bm.depth).min().unwrap_or(0);
+    Some((ranked, depth))
 }
 
-/// Main entry: iterative deepening + cache
-/// `dirty` collects every cache key this call inserted, so the caller can persist
-/// just those instead of rewriting the whole cache.
+/// Orders the root moves the way `minimax_ab` orders every other node: TT move first,
+/// then killers, then MVV/LVA. Shared by the parallel root and the MultiPV root so all
+/// three paths see the same move list in the same order.
+fn ordered_root_moves(gs: &mut GameState, depth: i32, ss: &mut SearchState) -> Vec<Move> {
+    let legal_moves = gs.get_legal_moves_vec();
+    let tt_best = ss.tt_get(gs.hash).map(|e| e.best_move).unwrap_or(Move::NULL);
+    let killers = ss.killer_moves.get(&depth).cloned().unwrap_or([Move::NULL; 2]);
+    let mut scored: Vec<(Move, i32)> = legal_moves
+        .iter()
+        .map(|&m| {
+            let s = if !tt_best.is_null() && m == tt_best {
+                1_000_000
+            } else if m == killers[0] || m == killers[1] {
+                50_000
+            } else {
+                mvv_lva_score(gs, m, ss)
+            };
+            (m, s)
+        })
+        .collect();
+    scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    scored.into_iter().map(|(m, _)| m).collect()
+}
+
+/// Exact scores for the best `k` root moves -- the book's ranks 2..k.
+///
+/// Ranks below 1 cannot be read off an ordinary alpha-beta search: once alpha is raised
+/// by the best move, every later root move returns a *bound* ("no better than alpha"),
+/// not a value, and filing those as scores would fill the book with numbers that mean
+/// nothing. So every score this returns comes from a full window -- for the first `k`
+/// moves directly, and for anything that displaces them via the re-search below.
+///
+/// Measured at depth 9, against the same search asked for one move: K=2 costs 2.4x from
+/// the initial position and 3.0x six plies in; K=3 costs 4.4x and 3.8x. (The estimate
+/// this was specced against, 1.5-2.5x, holds only for K=2 in the opening.)
+///
+/// What "exact" means here is procedural: never a fail-low or fail-high bound. It is not
+/// a claim that the number is the true depth-N minimax value, because this engine's
+/// scores are path-dependent -- searching each root move independently, with its own
+/// table, produces different numbers, and so does the ordinary single-PV root. That
+/// drift predates the book (see the null-move/TT-flag note on `search_worker`) and
+/// fixing it is an engine change, not a schema one.
+///
+/// The remaining moves still have to be checked in case one of them belongs in the top
+/// `k`, but they do not need a full window to do it. Searching them against
+/// `(cutoff, +inf)` (mirrored for Black) has a useful property: with the far side of the
+/// window open, a returned value can never fail high, so anything that beats the cutoff
+/// is already exact and goes straight into the ranking -- no re-search, and the raised
+/// alpha prunes hard on everything that does not.
+///
+/// Returns `None` if the search was cut short, because a partial pass ranks by move
+/// ordering rather than by score, and the caller has an honest single-PV result from the
+/// previous iteration to fall back on.
+///
+/// Runs sequentially even when the root split is enabled: `minimax_parallel` reports one
+/// move, and its workers' narrow scout windows are exactly the bounds this routine
+/// exists to avoid.
+fn multipv_root(
+    gs: &mut GameState,
+    depth: i32,
+    k: usize,
+    ss: &mut SearchState,
+) -> Option<Vec<(Move, i32)>> {
+    let maximizing = gs.current_turn == Color::White;
+    let neg_inf = i32::MIN + 1;
+    let inf = i32::MAX - 1;
+    let legal_moves = ordered_root_moves(gs, depth, ss);
+    if legal_moves.is_empty() {
+        return Some(Vec::new());
+    }
+    let k = k.min(legal_moves.len());
+
+    // Best-first for the side to move; scores stay white-relative throughout.
+    let better = |a: i32, b: i32| if maximizing { a > b } else { a < b };
+    let sort_ranked = |v: &mut Vec<(Move, i32)>| {
+        v.sort_by(|x, y| if maximizing { y.1.cmp(&x.1) } else { x.1.cmp(&y.1) });
+    };
+
+    let mut ranked: Vec<(Move, i32)> = Vec::with_capacity(k);
+    for &m in legal_moves.iter().take(k) {
+        gs.make_ai_move(m);
+        let (score, _) = minimax_ab(gs, depth - 1, neg_inf, inf, !maximizing, true, ss);
+        gs.undo_ai_move();
+        if ss.stopped {
+            return None;
+        }
+        ranked.push((m, score));
+    }
+    sort_ranked(&mut ranked);
+
+    for &m in legal_moves.iter().skip(k) {
+        // The score to beat: the weakest move currently holding a rank.
+        let cutoff = ranked[ranked.len() - 1].1;
+        let (alpha, beta) = if maximizing { (cutoff, inf) } else { (neg_inf, cutoff) };
+        gs.make_ai_move(m);
+        let (score, _) = minimax_ab(gs, depth - 1, alpha, beta, !maximizing, true, ss);
+        if !better(score, cutoff) {
+            // Not good enough to hold a rank. What came back is a bound, and it is
+            // discarded here rather than stored -- which is the whole reason ranks 2+
+            // cannot be read off an ordinary alpha-beta search.
+            gs.undo_ai_move();
+            if ss.stopped {
+                return None;
+            }
+            continue;
+        }
+        // It belongs in the ranking, so it needs a value rather than a bound. The
+        // narrow search above cannot supply one: this engine's null-move pruning returns
+        // a hard beta and the TT store site classifies flags against the original window,
+        // so a window-clamped score can come back tagged Exact (measured: the same
+        // position ranked 27 under a full window and 193 under a capped one). Every score
+        // that reaches the book comes from a full window.
+        let (exact, _) = minimax_ab(gs, depth - 1, neg_inf, inf, !maximizing, true, ss);
+        gs.undo_ai_move();
+        if ss.stopped {
+            return None;
+        }
+        ranked.pop();
+        ranked.push((m, exact));
+        sort_ranked(&mut ranked);
+    }
+
+    eprintln!(
+        "  [MULTIPV] {} ranked move(s) at depth {}: {}",
+        ranked.len(),
+        depth,
+        ranked
+            .iter()
+            .map(|(m, s)| format!("{:?}={}", m, s))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    Some(ranked)
+}
+
+/// Main entry: book probe, then iterative deepening.
+///
+/// `top_n` is how many ranked moves the caller wants. Anything above 1 runs the MultiPV
+/// root pass at the final depth so ranks 2.. carry exact scores -- see [`multipv_root`]
+/// for what that costs. There is no ply or depth gate on it: the caller decides where to
+/// spend, because the caller is the one that knows whether it is filling a book or
+/// playing a move.
+///
+/// `dirty` collects the position hashes this call wrote, so the caller can persist just
+/// those instead of rewriting the whole book.
+///
+/// Returns the ranked moves, best-first **for the side to move**, with white-relative
+/// scores: White's list runs non-increasing and Black's non-decreasing, so rank 1 is
+/// always the move that side wants and the sign never depends on whose turn it is. The
+/// list is empty only when the position has no legal moves.
 pub fn find_best_move(
     gs: &mut GameState,
     depth: i32,
-    move_cache: &mut HashMap<(String, i32), String>,
-    dirty: &mut Vec<(String, i32)>,
+    top_n: i32,
+    book: &mut Book,
+    dirty: &mut Vec<String>,
     time_limit: Option<f64>,
     parallel: Option<bool>,
-) -> (Move, i32) {
+) -> Vec<(Move, i32)> {
     let start = Instant::now();
     let maximizing = gs.current_turn == Color::White;
     let pos_hash_str = gs.hash.to_string();
+    let want_ranks = top_n.max(1) as usize;
 
-    // Check cache. An entry searched deeper than we were asked for answers the same
-    // question with more evidence behind it, so probe from the deepest stored depth
-    // down to the requested one and take the first legal hit. Never below `depth`:
-    // a shallower row is a weaker answer than the search we are about to run.
-    if let Some((m, hit_depth)) = probe_move_cache(gs, move_cache, &pos_hash_str, depth) {
+    if let Some((ranked, hit_depth)) = probe_book(gs, book, &pos_hash_str, depth, want_ranks) {
         eprintln!(
-            "[CACHE HIT] depth {} (requested {}) in {:.2}s",
-            hit_depth, depth, start.elapsed().as_secs_f64()
+            "[BOOK HIT] {} rank(s) at depth {} (requested {}) in {:.2}s",
+            ranked.len(),
+            hit_depth,
+            depth,
+            start.elapsed().as_secs_f64()
         );
-        return (m, 0);
+        return ranked;
     }
 
     let legal = gs.get_legal_moves_vec();
     if legal.is_empty() {
-        return (Move::NULL, evaluate_position(gs));
+        return Vec::new();
     }
     if legal.len() == 1 {
-        let m = legal[0];
-        cache_store(move_cache, dirty, &pos_hash_str, depth, m);
-        return (m, 0);
+        // Forced. Returned with a placeholder score and deliberately not stored: there is
+        // no completed depth behind it and no evaluation behind the 0, and the book's
+        // contract is that every row it holds is a real search result. Re-deriving this
+        // costs one move generation.
+        return vec![(legal[0], 0)];
     }
 
     let mut ss = SearchState::new();
     ss.deadline = time_limit.map(|secs| start + std::time::Duration::from_secs_f64(secs));
-    let mut best_move = Move::NULL;
-    let mut best_score = 0i32;
+
+    // The last iteration that ran to completion, and what it returned. Only a completed
+    // iteration may set this: the book records the depth actually reached, so a result
+    // salvaged from an aborted iteration (below) can be returned but must never be filed
+    // as if that depth had finished.
+    let mut completed: Option<(Vec<(Move, i32)>, i32)> = None;
+    // Fallback for a search cut short before any iteration finished.
+    let mut aborted_best: Option<(Move, i32)> = None;
 
     // Per-call `parallel` wins over the process-wide setting; None means "use the setting".
     let (global_parallel, parallel_min_depth) = parallel_search_config();
@@ -925,55 +1084,66 @@ pub fn find_best_move(
         eprintln!("  [ID] depth {}...", current_depth);
         let iter_start = Instant::now();
 
+        // MultiPV only at the final depth: the shallow iterations exist to warm the table
+        // and the move ordering, and paying the full-window premium on them buys ranks
+        // that the last iteration is about to overwrite.
+        let multipv_here = want_ranks > 1 && current_depth == depth;
+
         let too_cheap_to_split = last_iter_secs < MIN_SPLIT_SECS;
-        if current_depth >= parallel_threshold && too_cheap_to_split {
+        if current_depth >= parallel_threshold && too_cheap_to_split && !multipv_here {
             eprintln!(
                 "  [PARALLEL] depth {} not split: previous iteration took {:.3}s < {:.2}s",
                 current_depth, last_iter_secs, MIN_SPLIT_SECS
             );
         }
 
-        if current_depth < parallel_threshold || too_cheap_to_split {
+        if multipv_here {
+            match multipv_root(gs, current_depth, want_ranks, &mut ss) {
+                Some(ranked) if !ranked.is_empty() => {
+                    completed = Some((ranked, current_depth));
+                }
+                Some(_) => {}
+                None => {
+                    eprintln!("  Time limit reached during MultiPV at depth {}, keeping depth {}",
+                        current_depth,
+                        completed.as_ref().map(|(_, d)| *d).unwrap_or(0));
+                    break;
+                }
+            }
+        } else if current_depth < parallel_threshold || too_cheap_to_split {
             let (score, m) = minimax_ab(gs, current_depth, i32::MIN + 1, i32::MAX - 1, maximizing, true, &mut ss);
-            // If stopped mid-search, only use result if we have a previous best
             if ss.stopped {
+                // If stopped mid-search, only trust very shallow aborted results
                 if !m.is_null() && current_depth <= 2 {
-                    // Only trust very shallow aborted results
-                    best_move = m;
-                    best_score = score;
+                    aborted_best = Some((m, score));
                 }
                 eprintln!("  Time limit reached during depth {}, aborting", current_depth);
                 break;
             }
             if !m.is_null() {
-                best_move = m;
-                best_score = score;
-                cache_store(move_cache, dirty, &pos_hash_str, current_depth, m);
+                completed = Some((vec![(m, score)], current_depth));
             }
         } else {
             let (m, score, _) = minimax_parallel(gs, current_depth, &mut ss);
             // Same guard as the sequential path: an aborted iteration is not a result.
             if ss.stopped {
                 if !m.is_null() && current_depth <= 2 {
-                    // Only trust very shallow aborted results
-                    best_move = m;
-                    best_score = score;
+                    aborted_best = Some((m, score));
                 }
                 eprintln!("  Time limit reached during depth {}, aborting", current_depth);
                 break;
             }
             if !m.is_null() {
-                best_move = m;
-                best_score = score;
-                cache_store(move_cache, dirty, &pos_hash_str, current_depth, m);
+                completed = Some((vec![(m, score)], current_depth));
             }
         }
 
         let elapsed = iter_start.elapsed().as_secs_f64();
         last_iter_secs = elapsed;
-        eprintln!("  [ID] depth {} done in {:.2}s, score={}", current_depth, elapsed, best_score);
+        let iter_score = completed.as_ref().and_then(|(r, _)| r.first().map(|&(_, s)| s)).unwrap_or(0);
+        eprintln!("  [ID] depth {} done in {:.2}s, score={}", current_depth, elapsed, iter_score);
 
-        if best_score.abs() >= CHECKMATE_SCORE * 9 / 10 {
+        if iter_score.abs() >= CHECKMATE_SCORE * 9 / 10 {
             eprintln!("  Mate found at depth {}", current_depth);
             break;
         }
@@ -986,29 +1156,35 @@ pub fn find_best_move(
         }
     }
 
-    // Store best
-    if !best_move.is_null() {
-        cache_store(move_cache, dirty, &pos_hash_str, depth, best_move);
-
-        // Persist TT entries to cache
-        let mut tt_saved = 0;
-        for (h, e) in &ss.tt {
-            if e.depth >= 4 && e.flag == TTFlag::Exact && !e.best_move.is_null() {
-                let h_str = h.to_string();
-                let key = (h_str.clone(), e.depth);
-                if !move_cache.contains_key(&key) {
-                    cache_store(move_cache, dirty, &h_str, e.depth, e.best_move);
-                    tt_saved += 1;
-                }
-            }
-        }
-        if tt_saved > 0 {
-            eprintln!("  [TT→CACHE] saved {} positions", tt_saved);
-        }
-    }
-
     eprintln!("AI done in {:.2}s", start.elapsed().as_secs_f64());
-    (best_move, best_score)
+
+    match completed {
+        Some((ranked, depth_completed)) => {
+            // One book entry per search: the ranks this search produced, at the depth it
+            // actually reached, with the FEN that makes the hash mean something.
+            book_store(
+                book,
+                dirty,
+                &pos_hash_str,
+                crate::fen::to_fen(gs),
+                Some(gs.ply as i32),
+                &ranked,
+                depth_completed,
+            );
+            if ranked.len() < want_ranks {
+                eprintln!(
+                    "  [BOOK] stored {} rank(s), {} requested (search ended early or ran out of moves)",
+                    ranked.len(),
+                    want_ranks
+                );
+            }
+            ranked
+        }
+        // Nothing finished. Return whatever the aborted first iterations salvaged so the
+        // caller still has a move to play, but file none of it: `depth_completed` is 0
+        // and `book_store` refuses those.
+        None => aborted_best.map(|ms| vec![ms]).unwrap_or_default(),
+    }
 }
 
 // Move repr formatting for cache compatibility

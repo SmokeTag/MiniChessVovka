@@ -15,27 +15,46 @@ CHECKMATE_SCORE = 1000000
 STALEMATE_SCORE = 0
 
 # --- Module-level state (compatibility with play_online.py, precalc_openings.py) ---
-move_cache = {}  # Python-side mirror; Rust manages its own cache internally
+move_cache = {}  # Python-side mirror; Rust manages its own book internally
 tt = {}  # Not used directly; Rust has internal TT
-DB_PATH = "move_cache.db"
+DB_PATH = "book.db"
 
 # --- Database / Cache ---
 
 def setup_db():
-    """Initialize the move cache database."""
+    """Create the opening book schema in book.db (rebuilding it on a version change)."""
     _rs.setup_db()
 
 
 def load_move_cache_from_db():
-    """Load move cache from SQLite into Rust engine."""
+    """Load the opening book from SQLite into the Rust engine."""
     global move_cache
     _rs.load_move_cache_from_db()
-    # We don't mirror to Python dict anymore; Rust owns the cache
+    # We don't mirror to Python dict anymore; Rust owns the book
 
 
 def save_move_cache_to_db(cache_to_save=None):
-    """Save move cache from Rust engine to SQLite."""
+    """Write the positions searched since the last save back to book.db."""
     _rs.save_move_cache_to_db()
+
+
+def book_size():
+    """How many positions the in-memory book holds."""
+    return _rs.book_size()
+
+
+def to_fen(gamestate):
+    """Serialize a position to minihouse FEN (see engine_rs/src/fen.rs)."""
+    return _rs.to_fen(_sync_to_rust(gamestate))
+
+
+def from_fen(fen):
+    """Parse a minihouse FEN into a Rust GameState. Raises ValueError if malformed.
+
+    Returns the engine's own state object, not a `gamestate.GameState`: the book stores
+    FENs so positions can be re-searched, and a search takes the Rust state anyway.
+    """
+    return _rs.from_fen(fen)
 
 
 # --- Sync helpers ---
@@ -50,6 +69,10 @@ def _sync_to_rust(gamestate):
     rs.checkmate = gamestate.checkmate
     rs.stalemate = gamestate.stalemate
     rs.promoted_pieces = list(gamestate.promoted_pieces) if hasattr(gamestate, 'promoted_pieces') else []
+    # The book records how early a position can occur, and this is the only place that
+    # knows: the Rust state is rebuilt from scratch on every search, so without this
+    # every row would claim ply 0.
+    rs.ply = getattr(gamestate, 'ply_count', 0)
     return rs
 
 
@@ -124,14 +147,19 @@ def find_best_move(gamestate, depth=6, return_top_n=1, time_limit=None, parallel
     Args:
         gamestate: Python GameState object
         depth: Maximum search depth
-        return_top_n: If > 1, returns list of (move, score) tuples
+        return_top_n: If > 1, returns a list of (move, score) tuples ranked best-first
+                      for the side to move, and runs a MultiPV search so ranks 2+ carry
+                      exact scores instead of alpha-beta bounds. Measured at depth 9:
+                      about 2.4-3.0x a single-PV search for 2 moves, 3.8-4.4x for 3.
         time_limit: Max seconds for search. None = no limit.
         parallel: True forces the parallel root search for this call, False forces
                   single-threaded. None (default) uses set_parallel_search().
 
     Returns:
         If return_top_n == 1: best_move tuple or None
-        If return_top_n > 1: list of (move, score) tuples
+        If return_top_n > 1: list of (move, score) tuples, at most return_top_n long.
+        Scores are white-relative, so the list runs non-increasing for White and
+        non-decreasing for Black; rank 1 is the best move for whoever is to move.
     """
     print(f"AI ({gamestate.current_turn}) thinking with Rust engine, depth {depth}...")
     start_time = time.time()

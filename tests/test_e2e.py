@@ -26,7 +26,9 @@ class TestE2EGameFlow(unittest.TestCase):
 
     def setUp(self):
         """Set up test environment before each test."""
-        ai.setup_db()
+        # Load only. `setup_db()` here would run against the repo root -- creating the
+        # live book.db, and dropping its tables outright after a SCHEMA_VERSION bump.
+        # The one test that needs a schema builds it inside isolated_cache_db().
         ai.load_move_cache_from_db()
 
     def test_complete_ai_vs_ai_game(self):
@@ -257,21 +259,21 @@ class TestE2EGameFlow(unittest.TestCase):
     def test_move_cache_persistence(self):
         """Rows written by a search survive a save/load round trip.
 
-        Runs in a throwaway CWD via isolated_cache_db(): the Rust cache resolves
-        "move_cache.db" against the process CWD, so without it this test files its
-        scratch searches into the live training cache in the repo root.
+        Runs in a throwaway CWD via isolated_cache_db(): the Rust book resolves
+        "book.db" against the process CWD, so without it this test files its
+        scratch searches into the live book in the repo root.
 
         Counted straight out of SQLite rather than through `len(ai.move_cache)` --
-        that dict is vestigial (Rust owns the cache and never mirrors back into
+        that dict is vestigial (Rust owns the book and never mirrors back into
         it), so the old before/after comparison was 0 == 0 and passed even when
         nothing at all was persisted.
         """
         print("\n=== Testing Move Cache Persistence ===")
 
         def row_count():
-            conn = sqlite3.connect("move_cache.db")
+            conn = sqlite3.connect("book.db")
             try:
-                return conn.execute("SELECT COUNT(*) FROM move_cache").fetchone()[0]
+                return conn.execute("SELECT COUNT(*) FROM book_move").fetchone()[0]
             finally:
                 conn.close()
 
@@ -297,10 +299,10 @@ class TestE2EGameFlow(unittest.TestCase):
             gs = GameState()
             gs.setup_initial_board()
 
-            # The Rust cache is process-global and setUp loaded the live DB into
-            # it, so an opening search can be a pure cache hit that inserts
+            # The Rust book is process-global and setUp loaded the live DB into
+            # it, so an opening search can be a pure book hit that inserts
             # nothing. Walk further off the book until a search actually misses
-            # and writes -- self-correcting however full the real cache gets.
+            # and writes -- self-correcting however full the real book gets.
             saved = 0
             for _ in range(12):
                 ai.find_best_move(gs, depth=5)
@@ -313,14 +315,14 @@ class TestE2EGameFlow(unittest.TestCase):
             print(f"Rows written by the searches: {saved}")
             self.assertGreater(saved, 0, "Searching should have written cache rows")
 
-            # Reload into the Rust cache and write it back out: a round trip must
+            # Reload into the Rust book and write it back out: a round trip must
             # not lose rows.
             ai.load_move_cache_from_db()
             ai.save_move_cache_to_db(ai.move_cache)
 
             reloaded = row_count()
             print(f"Rows after reload + save: {reloaded}")
-            self.assertEqual(saved, reloaded, "Cache should persist after save/load")
+            self.assertEqual(saved, reloaded, "The book should persist after save/load")
 
     def test_game_state_consistency(self):
         """Test that game state remains consistent throughout gameplay."""
