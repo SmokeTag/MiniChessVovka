@@ -119,11 +119,19 @@ fn rust_move_to_py(py: Python<'_>, m: Move) -> PyObject {
         let to_tup = PyTuple::new(py, &[sq_row(to), sq_file(to)]).unwrap();
         let promo: PyObject = match m.promotion() {
             Some(pt) => {
-                // Determine case from context: white promotes with uppercase
-                let c = match pt {
-                    PieceType::Rook => "R",
-                    PieceType::Knight => "N",
-                    PieceType::Bishop => "B",
+                // Case encodes colour everywhere else in this codebase (board chars,
+                // 'wN'/'bN' drop codes), and gamestate.py validates promotion chars
+                // case-sensitively against PROMOTION_PIECES_WHITE_STR/_BLACK_STR.
+                // Move carries no colour, but the destination rank is unambiguous:
+                // White promotes on row 0, Black on the last row.
+                let white = sq_row(to) == 0;
+                let c = match (pt, white) {
+                    (PieceType::Rook, true) => "R",
+                    (PieceType::Rook, false) => "r",
+                    (PieceType::Knight, true) => "N",
+                    (PieceType::Knight, false) => "n",
+                    (PieceType::Bishop, true) => "B",
+                    (PieceType::Bishop, false) => "b",
                     _ => "?",
                 };
                 c.into_pyobject(py).unwrap().into_any().unbind()
