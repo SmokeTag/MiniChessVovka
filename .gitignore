@@ -67,6 +67,8 @@ win_of_*.jpg
 # Parallel self-play runtime
 logs/
 training_workers.pid
+book_workers.pid
+book_build.pid
 
 # Claude Code worktrees (2 GB of throwaway build trees)
 .claude/worktrees/
