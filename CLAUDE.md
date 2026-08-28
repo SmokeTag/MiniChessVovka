@@ -33,28 +33,125 @@ Always invoke Python through the project venv (`./venv/bin/python`, or activate 
 ./train_status.sh ; ./train_stop.sh
 ./bot_start.sh casual|rated        # chess.com bot (needs .env + playwright chromium)
 ./bot_stop.sh ; ./monitor_bot.sh
+./build_book_parallel.sh 20 6 10   # fill the opening book: 20 workers, to ply 6, depth 10
+./build_status.sh ; ./build_stop.sh
 ./venv/bin/python rebuild_book.py       # the only thing that deletes book rows; asks first
 ```
 
-## Filling the opening book in parallel
+## Filling the opening book
 
-`src/self_play.py` takes `--depth/--games/--exploration/--random-plies/--seed/--quiet`. Throughput
-comes from **many single-threaded workers**, never from `parallel=True` — see the parallelism policy
-below.
+**The book is an opening repertoire, not a record of games.** `build_book.py` is what fills it;
+self-play does not, and should not be pointed at it.
+
+The reason is that the book is read in exactly one place — `probe_book`, at the root of
+`find_best_move` — which means it is only ever read in a position where **the engine is the side to
+move**. That makes the tree it needs asymmetric, and the asymmetry is what makes it affordable:
+
+| at a node where | the builder does | children expanded |
+| --- | --- | --- |
+| **we** are to move | one search, one entry | **one** — the move we will actually play |
+| the **opponent** is to move | nothing: no search, no entry | **all** legal replies |
+
+We never play rank 2, so rank 2's subtree is dead weight; the opponent chooses, so every reply of
+theirs has to be answered. The tree grows like `B^(plies/2)` rather than `B^plies`, and half of what
+survives is never searched at all. Measured branching here is ~15–17, giving searched-node counts of:
+
+```
+ply    0     2      4       6        8
+W      1    15    240   ~4,100   ~74,000      (Black is identical, shifted one ply)
+```
+
+Those are the counts with no pruning. What a real build costs is a good deal less, because
+`--resign` cuts about half of it. The first full build, **ply 6 at depth 10, 20 workers, 65 minutes**,
+came out at 1,997 entries:
+
+```
+ply  0     1     2     3     4      5     6
+      1    15    15   173    90   1295   408
+     W     B     W     B     W      B     W
+```
+
+Note the asymmetry at an even `--max-ply`: White gets answers for four of its own moves (plies
+0/2/4/6) and Black for three (1/3/5), so the engine leaves book one move earlier as Black. Evening
+that up means `--max-ply 7`, which adds Black's ply-7 tier — on the order of 70k searches.
+
+About 18% of the rows land at a depth below the one asked for (`depth 1..9` in `build_status.sh`).
+Every one of them is a **mate score**: the mate break exits iterative deepening early, so `depth` is
+the depth that completed. A depth-10 probe rejects them and re-searches, which costs nothing — a
+mate found at depth 3 is found again in milliseconds.
+
+A whole self-play game, by contrast, writes ~200 entries of which maybe 8 are inside repertoire
+range and the rest are midgame positions no game will reach twice. `--random-plies` is worse than
+useless for this: a random prefix produces positions that never occur.
 
 ```bash
-./train_parallel.sh 20 10     # 20 workers, depth 10; logs in logs/selfplay/, PIDs in training_workers.pid
-./train_status.sh             # workers alive + book positions per completed depth
-./train_stop.sh               # SIGTERM, waits for each worker to flush, SIGKILL after 600s
-./train_stop.sh 2000          # same, but allow 2000s — SIGTERM cannot interrupt a search in flight
+./build_book_parallel.sh 20 6 10    # 20 workers, up to ply 6, depth 10
+./build_status.sh                   # entries per ply, and which repertoire each ply belongs to
+./build_stop.sh                     # SIGTERM, waits for the search in flight to flush
+RESIGN=1500 BREADTH=0-8:all,9-16:3 ./build_book_parallel.sh 20 12
+./venv/bin/python build_book.py --max-ply 6 --depth 10   # the same thing, one process
 ```
 
 Things about this that are easy to get wrong:
 
+- **Build depth must be at least the depth you play at.** The probe rejects any row shallower than
+  what it was asked for, so a tail built at depth 8 is invisible to a GUI searching at 10 — the work
+  is simply wasted. Build flat at 10 or deeper. "Deep near the root, shallow in the tail" is exactly
+  backwards.
+- **Build with rank 1 only.** MultiPV costs 2.4–4.4x, *and* the probe rejects an entry holding fewer
+  ranks than the caller asked for. Ranks 2+ only ever paid for themselves in self-play exploration,
+  which is not how the book gets filled any more.
+- **`--max-ply` is capped at 20** (`HARD_PLY_CAP`). Past that it is not a repertoire, and the tree
+  is not affordable.
+- **The resign cutoff is free, and does most of the pruning.** `--resign` (default 1200) stops
+  expansion once `|score|` says the line is decided; the score is the one the search just returned,
+  so it costs nothing. A bad opponent reply therefore costs exactly one search instead of a whole
+  subtree. Measured at depth 10 the score distribution is bimodal — balanced lines sit under 800,
+  decided ones over 1550, and nothing lands in between — so the exact threshold barely matters.
+- **`--opponent-breadth` is for depths where full breadth stops being affordable.** `"0-8:all,9-16:3"`
+  keeps every reply through ply 8 and the best 3 after. The ply in the spec is the **opponent node's**
+  ply. Ranking is one shallow MultiPV search *at the opponent node*, not one search per reply: the
+  latter costs 17x instead of 4.4x and files a row at all seventeen, which is how the pre-book
+  `move_cache` ended up ~97% unreachable. The one entry it does write sits at an opponent-turn hash
+  that the runtime never probes.
+- **A shallower search never replaces a deeper entry.** `book_store` returns early if the stored
+  rank-1 row is deeper at the same `eval_version`. Without it a narrowing scan could transpose onto
+  a position another line had already searched deep and silently overwrite it, because an entry is
+  replaced wholesale. Re-searching at equal depth or deeper still stores, which is what lets a later
+  pass deepen the book in place.
+
+### How the parallel build coordinates
+
+There is no work queue and no IPC. `build_book_parallel.sh` walks one our-turn tier per **stage**,
+and each stage is a barrier:
+
+```
+stage 2    one process, plies 0-2            ~31 searches
+stage 4    N shards, --split-ply 2           disjoint subtrees
+stage 6    N shards, --split-ply 4           ...two plies per stage
+```
+
+Everything a stage needs from the tier above is already in `book.db`, so when the next stage's
+workers re-walk that prefix every node up there is a **book hit returning in ~0s** — that is how a
+worker learns the move another worker searched, without being told. Below `--split-ply` each worker
+owns whole subtrees (`subtree_id % N == shard`), assigned in BFS order, which every worker
+reproduces identically because they all walk the prefix. Verified: a sharded build produces a
+`book.db` byte-identical to the serial one. The only duplicated work is where two subtrees
+transpose, ~1% of a tier.
+
+The same property makes the build **idempotent and resumable** — stopping and re-running the same
+command picks up where it left off, and is the only "resume" mechanism there is.
+
+Things about *running* it that are easy to get wrong:
+
 - **Workers must run from the repo root.** `DB_PATH` in `cache.rs` is the relative string
-  `"book.db"`, so a worker started elsewhere silently creates its own DB. `self_play.py`
-  now `os.chdir`s to the repo root itself (and puts it on `sys.path`; without that,
-  `python src/self_play.py` cannot import `gamestate`).
+  `"book.db"`, so a worker started elsewhere silently creates its own DB. `build_book.py` and
+  `self_play.py` both `os.chdir` to the repo root themselves (and put it on `sys.path`; without
+  that, `python src/self_play.py` cannot import `gamestate`). This is also the only seam a test
+  has for isolating the book — see **Tests**.
+- **`build_stop.sh` signals a recorded pid, never a name.** `pkill -f build_book_parallel.sh`
+  also matches the shell you typed the command into, and kills it. The driver writes `$$` to
+  `book_build.pid` for exactly this reason.
 - **Saves are incremental.** `save_move_cache_to_db` used to re-`INSERT OR REPLACE` the process's
   entire cache after *every move* — ~5µs/row, so ~1.3s per move once a worker holds 250k entries,
   times N workers on one write lock. `search::find_best_move` now returns the position hashes it
@@ -74,9 +171,15 @@ Things about this that are easy to get wrong:
   intact so the work is still recoverable. `rebuild_book.py` is the only thing that deletes rows.
 
 Depth 10 costs roughly: median ~3s/move, p90 ~12s, worst seen ~31s — crazyhouse midgames with full
-hands are far more expensive than the opening. `--random-plies` puts each worker in a different
-position so N workers cover new ground instead of re-searching the same tree. Workers load the DB
-only at startup, so they do not see each other's entries until restarted.
+hands are far more expensive than the opening. Measured on the ply-6 build: ~3.5s/search at plies
+0-2, but ~20s/search at plies 5-6, where both sides have pieces in hand. Budget for the tail, not
+for the root. Workers
+load the DB only at startup, so they do not see each other's entries until restarted — which is why
+the build is staged rather than one long run.
+
+**Self-play is not a book filler.** `src/self_play.py` and `train_parallel.sh` still exist and still
+write to the book, but pointing them at it fills ~97% of the rows with midgame positions that will
+never be reached again. Use them for playing strength work, not for the book.
 
 **One search writes one entry.** A depth-10 search leaves exactly one `book_move` row per rank plus
 one `position` row, and nothing else. The per-iteration stores and the TT dump that used to fill

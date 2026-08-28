@@ -799,6 +799,18 @@ fn book_store(
     if ranked.is_empty() || depth_completed <= 0 {
         return;
     }
+    // Never trade a deeper answer for a shallower one. `build_book.py`'s narrowing pass
+    // runs a cheap shallow search to rank the opponent's replies, and a transposition can
+    // land that result on a position some other line already searched deep -- an entry is
+    // replaced wholesale, so without this the deep row would be silently overwritten by
+    // the shallow one. A re-search at the same depth or deeper still stores, which is what
+    // lets a later pass add ranks; an entry from a superseded `eval_version` is stale
+    // whatever its depth, and is replaced.
+    if let Some(prev) = book.get(pos_hash_str).and_then(|e| e.moves.first()) {
+        if prev.eval_version == crate::eval::EVAL_VERSION && prev.depth > depth_completed {
+            return;
+        }
+    }
     let moves = ranked
         .iter()
         .enumerate()
