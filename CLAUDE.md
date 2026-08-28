@@ -32,6 +32,8 @@ Always invoke Python through the project venv (`./venv/bin/python`, or activate 
 ./bot_stop.sh ; ./monitor_bot.sh
 ./build_book_parallel.sh 20 6 10   # fill the opening book: 20 workers, to ply 6, depth 10
 ./build_status.sh ; ./build_stop.sh
+./venv/bin/python export_book.py        # book.db -> book.tsv, the versionable form (book.db is gitignored)
+./venv/bin/python import_book.py        # book.tsv -> book.db; --merge keeps the deeper row
 ./venv/bin/python migrate_book.py       # carry book.db to the current schema, keeping every row
 ./venv/bin/python rebuild_book.py       # the only thing that deletes book rows; asks first
 ```
@@ -395,6 +397,44 @@ position(hash, fen, ply)                                  -- PK hash
 - The book is process-global and filled as you search, so **searching the same position twice in one
   process is a hit that reports ~0s** — the reason `bench/` forks a fresh process per measurement and
   calls `find_best_move_with_score` (a plain single-PV search) rather than asking for two moves.
+
+**`book.db` is gitignored; `book.tsv` is what goes in git.** The DB rewrites every page on a VACUUM
+or a migration — measured, the version-2 migration took it 1.86 → 2.76 → 1.76 MB with identical
+logical content — so tracking the binary means a fresh multi-MB blob per commit forever, and a
+binary merge conflict with no resolution the first time two branches both add rows. "It is small"
+also expires: ply 6 held 1,997 rows and ply 8 holds 10,001, ~5x per two plies.
+
+```bash
+./venv/bin/python export_book.py           # book.db -> book.tsv
+./venv/bin/python import_book.py           # book.tsv -> book.db (refuses a non-empty book)
+./venv/bin/python import_book.py --merge   # combine, keeping the deeper row
+./venv/bin/python import_book.py --check   # verify the file, write nothing
+```
+
+Measured at 10,001 rows: 1.76 MB binary, 0.68 MB text, **0.09 MB once git packs it** — and unlike
+the binary it delta-compresses between versions, merges line by line, and is reviewable.
+
+- **The export is keyed by FEN, not by hash, and that is the whole point.** A Zobrist hash is
+  one-way, so an artifact keyed on one dies the moment the hashing changes — which is exactly why
+  nothing was salvaged from `move_cache`. `import_book.py` re-derives every hash through
+  `from_fen` → `get_position_hash`, so the file survives changes the DB cannot. That also makes the
+  import an engine run rather than a plain SQL load.
+- **Diff stability is designed in, and easy to undo.** Rows sort by `(fen, rank)` and by nothing
+  else — *not* by ply, which is path-dependent (the minimum ever seen wins), so sorting on it would
+  let a later build that reaches a position by a shorter route reshuffle the file for no semantic
+  reason. The header carries **no timestamp**, so an unchanged book re-exports byte-identically.
+  Add one and every export becomes a diff.
+- **The import verifies before it writes.** Every FEN must satisfy `to_fen(from_fen(fen)) == fen`
+  (a FEN that does not round-trip would hash as something else), and no two distinct FENs may share
+  a hash. Either fails the whole import rather than filing a row against the wrong position.
+  `position` rows are written before `book_move` rows — the foreign key makes that a precondition.
+- **`--merge` keeps the deeper row**, the rule `search::book_store` already applies. Equal depth
+  lets the imported row win, which is how you overwrite in place.
+- A `position` with no `book_move` is **not exported** — it carries no searched work and the builder
+  re-derives it for free, so a round trip is not expected to reproduce it. The analysis cache is not
+  exported by default either: it is exploration, not a curated repertoire.
+- `tests/test_book_export.py` is what keeps this honest. It asserts the hashes come back, not merely
+  that the file parses.
 
 `move_cache.db` was the predecessor and is **gone**. Nothing was migrated out of it: its hashes
 could not be turned back into FENs, and ~97% of its rows were unreachable by the depth-10 probe
