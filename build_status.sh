@@ -34,11 +34,24 @@ for ply, n in c.execute(
         print(f"   ?    {n:>7}   (no ply recorded)")
         continue
     print(f"  {ply:>3}    {n:>7}   {'White' if ply % 2 == 0 else 'Black'}")
-print("  depth of rank-1 rows:")
+# Mate rows are excluded here: the mate break exits iterative deepening early, so their
+# `depth` records the iteration that found the mate rather than how far the search got.
+# probe_book accepts them at any depth, so counting them as shallow rows makes the book
+# look far less deep than it is.  CHECKMATE_SCORE is 1_000_000; search::is_mate_score
+# uses 90% of it as the threshold.
+MATE_CUTOFF = 900_000
+mates = c.execute(
+    "select count(*) from book_move where rank = 1 and abs(score) >= ?", (MATE_CUTOFF,)
+).fetchone()[0]
+print("  depth of rank-1 rows (mates excluded):")
 for depth, n in c.execute(
-    "select depth, count(*) from book_move where rank = 1 group by depth order by depth"
+    "select depth, count(*) from book_move where rank = 1 and abs(score) < ?"
+    " group by depth order by depth",
+    (MATE_CUTOFF,),
 ):
     print(f"    depth {depth:>2}: {n}")
+if mates:
+    print(f"    mates:    {mates}   [any depth; accepted by probe_book at any depth]")
 multi = c.execute("select count(*) from book_move where rank > 1").fetchone()[0]
 if multi:
     print(f"  alternatives (rank > 1): {multi}   [opponent-reply scans; never probed]")
