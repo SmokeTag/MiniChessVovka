@@ -245,7 +245,12 @@ easy to undo by accident:
 - **Panel zones have fixed heights** (`layout.py`): header, controls and the bottom status band
   are reserved, and only the move list flexes. Hands live in strips beside the board rather
   than in the panel, and show a `×N` count instead of one sprite per copy — both so that a
-  filling hand can never push a button out from under the cursor.
+  filling hand can never push a button out from under the cursor. The one band sized from
+  something other than the window is the hint-lines list, whose height comes from
+  `Layout(..., analysis_rows=n)` — a *setting*, never live search state, so it still cannot
+  resize mid-search; it sits below the controls, so only the move list absorbs the change.
+  Changing that setting calls `Game.relayout()`, which rebuilds the geometry without touching
+  the window.
 - **Redraw is dirty-flagged.** `Game.dirty` gates rendering; the loop idles at `IDLE_FPS`
   and only rises to `FPS` while something animates. Fonts and scaled sprites are memoised in
   `gui.py`, so a still board costs almost nothing. Any new per-frame `smoothscale` undoes this.
@@ -260,7 +265,69 @@ the GUI no longer uses them. Hit regions are produced by the code that draws eac
 control can never be clickable where it is not visible — and the promotion picker clears every
 other region, which is what stops clicks reaching the buttons underneath it.
 
-`gui_settings.json` (gitignored) remembers window size, depth, AI toggles, hints and orientation.
+`gui_settings.json` (gitignored) remembers window size, depth, AI toggles, hints, how many hint
+lines to show, and orientation. Both AI toggles default to **off** — a fresh start is
+human-vs-human, and each side is opted in by its own button.
+
+**The GUI never writes to the book on its own.** `poll_ai` used to call
+`save_move_cache_to_db` after every engine move, which flushed the *entire* `DIRTY_KEYS`
+queue — so one AI move filed every position the session had searched since the last one,
+hints and idle exploration included. That is the opposite of what a curated repertoire
+wants, and it is invisible while it happens. The GUI now only ever *reads* the book
+(`load_move_cache_from_db` at startup). A row goes in when the user presses **Save position
+to book** (Ctrl+S), which calls `ai.save_position_to_book(gs)` and writes exactly one
+position. The button's badge counts what the session has searched and not kept, so
+"explored a lot, saved none" is visible rather than something to take on trust.
+
+Two save paths now exist and they are not interchangeable:
+
+| call | writes | for |
+| --- | --- | --- |
+| `ai.save_move_cache_to_db()` | everything queued in `DIRTY_KEYS` | `build_book.py`, `play_online.py` — every search they run is one they chose |
+| `ai.save_position_to_book(gs)` | one named position | interactive front ends, where the search list is whatever the user glanced at |
+
+`ai.book_has_position(gs)` says whether the second would write anything;
+`pending_book_writes()` / `discard_pending_book_writes()` report and drop the queue. The
+in-memory book is still filled by every search and is still the analysis cache — a position
+searched twice in one process is a ~0s hit whether or not it was ever saved. Only the disk
+write is gated.
+
+Worth knowing when curating: `probe_book` is read at the root of `find_best_move`, so a row
+is only ever *consulted* at a position where the engine is to move. Saving a position where
+you are to move files a perfectly good row that the runtime will never probe in that
+configuration.
+
+**The depth control governs every search, including the hint.** `HINT_MAX_DEPTH` is deleted: it
+clamped the hint to 6 whatever the selector said, and with both AI toggles off the hint is the
+*only* search the GUI runs — so choosing depth 10 changed nothing that ever executed and the
+selector looked broken while working exactly as written. Do not reintroduce a private cap on any
+search path; a setting the user can see must be the one that runs. Wanting a faster hint is what
+lowering the depth is for, and the header shows the hint's elapsed time so a deep one is visible
+rather than mistaken for a hang.
+
+**Controls that cannot change anything still answer.** The depth and hint-line steppers keep
+their end buttons in `hits` at the top and bottom of their ladders (`gui._draw_stepper`), and
+`set_depth` / `set_hint_lines` toast "Depth 10 is the deepest setting" rather than returning
+silently. Dropping them from `hits` is what made the depth control read as broken: at the saved
+default of 10 the "›" was both greyed and unregistered, so clicking it did nothing at all. The
+same rects are registered under `hits['wheel']` so the mouse wheel nudges whichever stepper it
+is over.
+
+**Scores are white-relative everywhere.** `search::find_best_move`, `eval::evaluate_position`
+and therefore `ai.find_best_move_with_score` all return positive-favours-White, whichever side
+is to move; `utils.format_score` / `score_advantage` are the only formatters, and the eval
+readout never flips sign per turn. The readout falls back to the static evaluation on every
+position change (`Game.refresh_static_score`) and is overwritten by a completed search, which
+labels itself `depth N` — "static" and "depth 10" are different claims about the same number,
+so the source is always shown. `eval.rs` encodes a mate as a flat ±`CHECKMATE_SCORE` with no
+distance in it, so the display says "White mates", never "M3".
+
+**More than one hint line means MultiPV.** `HintThread(lines=n)` with `n > 1` calls
+`find_best_move(..., return_top_n=n)`, which is 2.4–4.4x a single-PV search at the same depth —
+that cost is why the count is a user-facing setting and why the label beside it names the
+multiplier. `n == 1` routes through `find_best_move_with_score` instead, which is a plain
+single-PV search that happens to hand back its score. A forced move carries no search behind it,
+so its placeholder `0` is turned back into `None` rather than shown as `+0.00`.
 
 **`ai.py` is a thin shim, not the AI.** It exists so `gui.py`, `play_online.py` and `build_book.py`
 keep a stable Python API while all real work happens in Rust. Its module-level `move_cache`

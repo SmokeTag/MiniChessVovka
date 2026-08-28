@@ -66,3 +66,6 @@ book_build.pid
 # Claude Code worktrees (2 GB of throwaway build trees)
 .claude/worktrees/
 gui_settings.json
+
+# local book snapshots
+backups/
