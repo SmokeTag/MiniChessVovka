@@ -17,6 +17,11 @@
 #   ./build_book_parallel.sh                 # 20 workers, ply 6, depth 10
 #   ./build_book_parallel.sh 12 8 10         # 12 workers, ply 8, depth 10
 #   RESIGN=1500 BREADTH=0-8:all,9-16:3 ./build_book_parallel.sh 20 12
+#   EXPORT=0 ./build_book_parallel.sh        # skip the book.tsv refresh at the end
+#
+# On the way out -- whether it finished or you stopped it -- the build refreshes
+# book.tsv, the git-tracked copy of book.db (which is gitignored). It never commits;
+# it prints the command if there is anything to keep.
 #
 # Runs in the foreground so you can watch the stages. To detach:
 #   nohup ./build_book_parallel.sh 20 6 > logs/book/build.log 2>&1 &
@@ -55,6 +60,39 @@ mkdir -p "$LOG_DIR"
 # command into, and anything else that happens to mention the name.
 echo $$ > "$DRIVER_PID_FILE"
 
+# Refresh book.tsv, the versioned copy of the book.
+#
+# book.db is gitignored and book.tsv is what git tracks, so the two drift the moment a
+# build adds rows and nothing says so out loud. Running it here is what keeps "the book"
+# and "the book in git" the same claim.
+#
+# The export is byte-stable -- no timestamp in the header, rows sorted by (fen, rank) --
+# so "unchanged" below means this build genuinely added nothing, not that the step
+# silently failed.
+#
+# It exports and never commits. What goes into a commit is not a build script's call,
+# and a build that committed on its own would eventually commit a half-finished tier.
+export_snapshot() {
+    if [ "${EXPORT:-1}" = "0" ]; then
+        return 0
+    fi
+    echo
+    echo "--- refreshing book.tsv ---"
+    if ! "$PY" export_book.py; then
+        echo "  Export failed. book.db is untouched and still authoritative;" >&2
+        echo "  re-run ./venv/bin/python export_book.py once you know why." >&2
+        return 1
+    fi
+    git rev-parse --git-dir >/dev/null 2>&1 || return 0
+    if [ -z "$(git status --porcelain -- book.tsv 2>/dev/null)" ]; then
+        echo "  book.tsv is unchanged: this build added no new rows."
+        return 0
+    fi
+    STAT=$(git diff --numstat -- book.tsv 2>/dev/null | awk '{printf "+%s/-%s lines", $1, $2}')
+    echo "  book.tsv changed${STAT:+ ($STAT)}. To keep it:"
+    echo "      git add book.tsv && git commit -m 'Extend the book'"
+}
+
 stop_workers() {
     # SIGTERM lets each worker finish its current search and flush; the search itself is
     # a blocking Rust call that cannot see the flag, so this is not instant.
@@ -65,6 +103,9 @@ stop_workers() {
     : > "$PID_FILE"
     rm -f "$DRIVER_PID_FILE"
     echo "Stopped. The build is resumable: re-run the same command to pick up where it left off."
+    # Whatever the workers flushed before dying is real, curated work. Export it here or
+    # it sits in a gitignored file with nothing recording that it arrived.
+    export_snapshot
     exit 130
 }
 trap stop_workers INT TERM
@@ -112,3 +153,4 @@ echo
 echo "=================================="
 echo "Build finished in $(( $(date +%s) - STARTED ))s."
 ./build_status.sh
+export_snapshot

@@ -25,12 +25,21 @@ Run everything from the repo root, through the venv.
 
 ## The normal loop
 
-**After a build, save the work:**
+**After a build, save the work.** `build_book_parallel.sh` already runs the export for you
+on the way out — whether it finished or you stopped it — and prints the commit line if
+anything changed. All you do is:
+
+```bash
+git add book.tsv && git commit -m "Extend the book to ply 8"
+```
+
+Run it by hand after a single-process `build_book.py`, or any time you are unsure:
 
 ```bash
 ./venv/bin/python export_book.py     # book.db -> book.tsv
-git add book.tsv && git commit -m "Extend the book to ply 8"
 ```
+
+`EXPORT=0 ./build_book_parallel.sh ...` skips the automatic refresh.
 
 **On a fresh clone, get a book:**
 
@@ -58,7 +67,11 @@ the same file is how you overwrite in place.
 
 **Re-exporting an unchanged book produces an identical file.** If `git diff book.tsv` is
 empty after a build, the build genuinely added nothing. There is no timestamp in the
-header, on purpose.
+header, on purpose. `book.db` *will* still show as modified — SQLite churns pages on every
+open — which is the whole reason the binary is not the thing in git.
+
+**The build exports but never commits.** What goes into a commit is not a build script's
+call, and a build that committed on its own would eventually commit a half-finished tier.
 
 **A stale `eval_version` is reported, not blocked.** If you changed an eval constant and
 bumped `EVAL_VERSION`, the import warns how many rows were scored by the old evaluation.
