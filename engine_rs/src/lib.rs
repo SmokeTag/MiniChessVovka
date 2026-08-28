@@ -22,6 +22,12 @@ lazy_static::lazy_static! {
     /// Position hashes written since the last save. Lets save_move_cache_to_db push only
     /// the new entries instead of rewriting the whole book — see cache::save_book_entries.
     static ref DIRTY_KEYS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    /// Hashes known to have a row in `book_move` on disk: everything `load_book` read,
+    /// plus everything `save_book_position` has written this session. The in-memory book
+    /// cannot answer this on its own once the analysis cache is loaded into it — both
+    /// stores share one map, and only the table a row came from says which it is.
+    static ref BOOK_HASHES: Mutex<std::collections::HashSet<String>> =
+        Mutex::new(std::collections::HashSet::new());
 }
 
 /// Convert a Python move tuple to our internal Move
@@ -644,10 +650,71 @@ fn get_position_hash(gs: &PyGameState) -> String {
 #[pyfunction]
 fn load_move_cache_from_db() {
     let loaded = cache::load_book();
+    *BOOK_HASHES.lock().unwrap() = loaded.keys().cloned().collect();
     let mut book = BOOK.lock().unwrap();
     *book = loaded;
     // Everything just loaded is already on disk.
     DIRTY_KEYS.lock().unwrap().clear();
+}
+
+/// Merges the analysis cache into the in-memory book, and returns how many entries it
+/// added.
+///
+/// **The book wins every collision.** A curated row and a row from someone poking at a
+/// position are not interchangeable, and a probe cannot tell them apart once they are in
+/// the same map — so the repertoire's answer is the one that survives, whatever depth
+/// the cached one reached.
+///
+/// Loading this is what makes the cache worth having: `probe_book` reads the one map, so
+/// a position analysed in an earlier session comes back as a hit instead of a re-search.
+/// It also means the engine will *play* from cached analysis, which is why nothing loads
+/// it implicitly — `build_book.py` and the bot call `load_move_cache_from_db` alone and
+/// see the book exactly as they always did.
+#[pyfunction]
+fn load_analysis_from_db() -> usize {
+    let cached = cache::load_store(cache::Store::Analysis);
+    let mut book = BOOK.lock().unwrap();
+    let mut added = 0usize;
+    for (hash, entry) in cached {
+        if !book.contains_key(&hash) {
+            book.insert(hash, entry);
+            added += 1;
+        }
+    }
+    // Loaded, therefore already on disk: not pending.
+    DIRTY_KEYS.lock().unwrap().clear();
+    added
+}
+
+/// Flushes every position searched since the last flush into the analysis tables.
+///
+/// This is the bulk write the book deliberately no longer gets. Everything a session
+/// searched belongs in the cache — that is what a cache is — and nothing here can reach
+/// `book_move`, which only `save_book_position` writes.
+#[pyfunction]
+fn save_analysis_to_db() -> PyResult<usize> {
+    let book = BOOK.lock().unwrap();
+    let mut dirty = DIRTY_KEYS.lock().unwrap();
+    if dirty.is_empty() {
+        return Ok(0);
+    }
+    cache::save_entries(&book, &dirty, cache::Store::Analysis)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let n = dirty.len();
+    dirty.clear();
+    Ok(n)
+}
+
+/// Drops the analysis tables and recreates them empty. The book is untouched.
+#[pyfunction]
+fn rebuild_analysis() -> PyResult<()> {
+    cache::rebuild_analysis().map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Whether this position already has a row in `book_move` on disk.
+#[pyfunction]
+fn book_has_row(gs: &PyGameState) -> bool {
+    BOOK_HASHES.lock().unwrap().contains(&gs.inner.hash.to_string())
 }
 
 /// Writes the positions searched since the last save.
@@ -667,6 +734,78 @@ fn save_move_cache_to_db(_py: Python<'_>, _cache_arg: Option<&Bound<'_, PyAny>>)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     dirty.clear();
     Ok(())
+}
+
+/// Writes **one** position's book entry, named by the caller, and nothing else.
+///
+/// This is the deliberate counterpart to `save_move_cache_to_db`, which flushes every
+/// hash queued since the last save. A GUI session searches whatever the user happens to
+/// look at -- hints, engine replies, idle exploration -- and a bulk flush cannot tell
+/// any of that apart from a line the user actually wants in the repertoire. The book is
+/// a curated artefact, so filing a row into it is an explicit act: the caller names the
+/// position and gets back whether there was anything to write.
+///
+/// Returns `false` when this process has no searched entry for the position -- nothing
+/// was written, and that is not an error. Loading the book does not count: entries read
+/// from disk are already there, and carry no FEN to write a `position` row from.
+#[pyfunction]
+fn save_book_position(gs: &PyGameState) -> PyResult<bool> {
+    let hash = gs.inner.hash.to_string();
+    let mut book = BOOK.lock().unwrap();
+    let Some(entry) = book.get_mut(&hash) else {
+        return Ok(false);
+    };
+
+    // Entries that came off disk carry no FEN -- neither load reads the positions table,
+    // because the hot path has no use for one and 10k of them cost memory for nothing.
+    // Saving such an entry to the book without a FEN would file a hash that can never be
+    // turned back into a position, which is the exact defect that killed `move_cache`.
+    // The caller is *looking at* the position, so the FEN is free and authoritative here.
+    if entry.fen.is_none() {
+        entry.fen = Some(fen::to_fen(&gs.inner));
+    }
+    if entry.ply.is_none() {
+        entry.ply = Some(gs.inner.ply as i32);
+    }
+
+    let book = &*book;
+    cache::save_book_entries(book, std::slice::from_ref(&hash))
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    // No longer pending: the analysis flush must not also file it as exploration.
+    DIRTY_KEYS.lock().unwrap().retain(|k| k != &hash);
+    BOOK_HASHES.lock().unwrap().insert(hash);
+    Ok(true)
+}
+
+/// Whether this process holds a searched book entry for `gs` -- i.e. whether
+/// `save_book_position` would write anything.
+#[pyfunction]
+fn book_has_position(gs: &PyGameState) -> bool {
+    BOOK.lock().unwrap().contains_key(&gs.inner.hash.to_string())
+}
+
+/// How many searched positions are queued but not on disk.
+///
+/// The in-memory book is also the analysis cache, so this counts a session's exploration
+/// as well as anything worth keeping. It exists so a front end can say what it is sitting
+/// on rather than leaving the user to guess.
+#[pyfunction]
+fn pending_book_writes() -> usize {
+    let dirty = DIRTY_KEYS.lock().unwrap();
+    let unique: std::collections::HashSet<&str> = dirty.iter().map(|s| s.as_str()).collect();
+    unique.len()
+}
+
+/// Drops the queue of unsaved positions without writing them.
+///
+/// The entries stay in the in-memory book, so they are still cache hits for the rest of
+/// the session; they simply stop being candidates for a bulk flush.
+#[pyfunction]
+fn discard_pending_book_writes() -> usize {
+    let mut dirty = DIRTY_KEYS.lock().unwrap();
+    let n = dirty.len();
+    dirty.clear();
+    n
 }
 
 /// Creates the book schema if it is absent. Raises on a foreign schema; never drops.
@@ -732,6 +871,14 @@ fn minichess_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_position_hash, m)?)?;
     m.add_function(wrap_pyfunction!(load_move_cache_from_db, m)?)?;
     m.add_function(wrap_pyfunction!(save_move_cache_to_db, m)?)?;
+    m.add_function(wrap_pyfunction!(save_book_position, m)?)?;
+    m.add_function(wrap_pyfunction!(book_has_position, m)?)?;
+    m.add_function(wrap_pyfunction!(pending_book_writes, m)?)?;
+    m.add_function(wrap_pyfunction!(discard_pending_book_writes, m)?)?;
+    m.add_function(wrap_pyfunction!(load_analysis_from_db, m)?)?;
+    m.add_function(wrap_pyfunction!(save_analysis_to_db, m)?)?;
+    m.add_function(wrap_pyfunction!(rebuild_analysis, m)?)?;
+    m.add_function(wrap_pyfunction!(book_has_row, m)?)?;
     m.add_function(wrap_pyfunction!(setup_db, m)?)?;
     m.add_function(wrap_pyfunction!(rebuild_book, m)?)?;
     m.add_function(wrap_pyfunction!(book_size, m)?)?;

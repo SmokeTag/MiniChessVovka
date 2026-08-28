@@ -7,13 +7,26 @@
 //! search -- the depth that actually completed, an exact score, and as many ranked
 //! alternatives as the search was asked to produce.
 //!
-//! Two tables, written together in one transaction:
+//! Two *pairs* of tables. Each pair is written together in one transaction:
 //!
 //! - `book_move` is the hot path. Everything a probe needs is in the row, so the
 //!   runtime lookup never joins `position`.
 //! - `position` is what makes a hash mean something again. A Zobrist hash is one-way, so
 //!   without a FEN beside it a book entry can never be re-opened, re-searched, or
 //!   expanded from. See `fen.rs`.
+//!
+//! `analysis_move` / `analysis_position` are the same two tables again, holding the
+//! *analysis cache*: everything an interactive session searched, kept so that revisiting
+//! a line is a probe hit rather than a re-search. They exist because the book is a
+//! curated repertoire and exploration is not -- filing idle analysis into `book_move`
+//! is how a repertoire stops meaning anything. Nothing writes across the pair boundary:
+//! `Store::Book` is only ever written by an explicit save, `Store::Analysis` only by a
+//! front end flushing what it searched.
+//!
+//! The analysis pair was added without bumping `SCHEMA_VERSION`. It is purely additive
+//! -- an older build never looks for those tables and reads the book exactly as before --
+//! and a bump would make `ensure_schema` refuse every book.db already on disk, whose only
+//! remedy is `rebuild_book.py`, which drops the thing being protected.
 //!
 //! The DB lives in `book.db`. It did not replace the old `move_cache.db` in place: that
 //! file's hashes could not be turned back into FENs, so nothing in it was migratable, and
@@ -35,6 +48,40 @@ const DB_PATH: &str = "book.db";
 /// ("no depth column -> DROP TABLE"), a heuristic that cannot tell a schema this module
 /// has never seen from one it wrote itself. A version integer can.
 pub const SCHEMA_VERSION: i32 = 1;
+
+/// Which pair of tables a read or write targets.
+///
+/// The two pairs are structurally identical and deliberately never merged: a row's table
+/// *is* its provenance. `Book` is curated and small; `Analysis` is whatever a session
+/// happened to look at and grows without anyone deciding it should.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Store {
+    Book,
+    Analysis,
+}
+
+impl Store {
+    pub fn moves_table(self) -> &'static str {
+        match self {
+            Store::Book => "book_move",
+            Store::Analysis => "analysis_move",
+        }
+    }
+
+    pub fn positions_table(self) -> &'static str {
+        match self {
+            Store::Book => "position",
+            Store::Analysis => "analysis_position",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Store::Book => "book",
+            Store::Analysis => "analysis cache",
+        }
+    }
+}
 
 /// What can go wrong opening or preparing the book.
 #[derive(Debug)]
@@ -162,6 +209,20 @@ pub fn rebuild_db() -> Result<(), BookError> {
     create_tables(&conn)
 }
 
+/// Drops the analysis cache and recreates it empty. Leaves the book untouched.
+///
+/// Separate from [`rebuild_db`] on purpose: discarding a session's exploration and
+/// discarding a curated repertoire are not the same decision, and one must never be a
+/// side effect of the other.
+pub fn rebuild_analysis() -> Result<(), BookError> {
+    let conn = open_db()?;
+    eprintln!("[BOOK] clearing the analysis cache; {} and {} are untouched",
+              Store::Book.moves_table(), Store::Book.positions_table());
+    conn.execute("DROP TABLE IF EXISTS analysis_move", [])?;
+    conn.execute("DROP TABLE IF EXISTS analysis_position", [])?;
+    create_tables(&conn)
+}
+
 fn create_tables(conn: &Connection) -> Result<(), BookError> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS book_move (
@@ -184,6 +245,30 @@ fn create_tables(conn: &Connection) -> Result<(), BookError> {
         [],
     )?;
 
+    // The analysis pair. Additive, so no SCHEMA_VERSION bump: a build that predates
+    // these tables reads book_move and position exactly as it always did, and bumping
+    // would make ensure_schema refuse every book.db in existence.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS analysis_move (
+            hash         TEXT NOT NULL,
+            rank         INTEGER NOT NULL,
+            move         TEXT NOT NULL,
+            score        INTEGER NOT NULL,
+            depth        INTEGER NOT NULL,
+            eval_version INTEGER NOT NULL,
+            PRIMARY KEY (hash, rank)
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS analysis_position (
+            hash TEXT PRIMARY KEY,
+            fen  TEXT NOT NULL,
+            ply  INTEGER
+        )",
+        [],
+    )?;
+
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
@@ -196,6 +281,13 @@ fn create_tables(conn: &Connection) -> Result<(), BookError> {
 /// without the test suite creating -- or, after a `SCHEMA_VERSION` bump, dropping -- the
 /// live `book.db` in the repo root. Writing is where the schema gets made.
 pub fn load_book() -> Book {
+    load_store(Store::Book)
+}
+
+/// Loads one store's move table into memory. `Store::Analysis` is read the same way and
+/// under the same rules; a missing table (an older book.db that predates the analysis
+/// pair) simply loads as empty.
+pub fn load_store(store: Store) -> Book {
     let mut book: Book = HashMap::new();
     if !std::path::Path::new(DB_PATH).exists() {
         return book;
@@ -212,10 +304,12 @@ pub fn load_book() -> Book {
                 eprintln!("[BOOK] loading it as empty; nothing on disk was touched");
                 return book;
             }
-            match conn.prepare(
+            let sql = format!(
                 "SELECT hash, rank, move, score, depth, eval_version
-                 FROM book_move ORDER BY hash, rank",
-            ) {
+                 FROM {} ORDER BY hash, rank",
+                store.moves_table()
+            );
+            match conn.prepare(&sql) {
                 Ok(mut stmt) => {
                     let rows = stmt.query_map([], |row| {
                         Ok((
@@ -242,9 +336,11 @@ pub fn load_book() -> Book {
                         }
                     }
                 }
-                Err(e) => eprintln!("Error preparing book query: {}", e),
+                // A missing analysis table is ordinary on a book.db written before the
+                // pair existed: nothing to load, nothing to report as a failure.
+                Err(e) => eprintln!("Error preparing {} query: {}", store.label(), e),
             }
-            eprintln!("Loaded {} positions from the book.", book.len());
+            eprintln!("Loaded {} positions from the {}.", book.len(), store.label());
         }
         Err(e) => eprintln!("Error opening book DB: {}", e),
     }
@@ -262,6 +358,11 @@ pub fn load_book() -> Book {
 /// read-then-write transaction from failing with `SQLITE_BUSY_SNAPSHOT` when another
 /// worker commits underneath it.
 pub fn save_book_entries(book: &Book, hashes: &[String]) -> Result<(), BookError> {
+    save_entries(book, hashes, Store::Book)
+}
+
+/// As [`save_book_entries`], but naming which pair of tables to write.
+pub fn save_entries(book: &Book, hashes: &[String], store: Store) -> Result<(), BookError> {
     if hashes.is_empty() {
         return Ok(());
     }
@@ -288,18 +389,23 @@ pub fn save_book_entries(book: &Book, hashes: &[String]) -> Result<(), BookError
         // Replace the whole rank list rather than upserting row by row: a re-search that
         // returns fewer ranks than last time must not leave the old tail behind, where it
         // would sit at a rank whose score came from a different search.
-        if let Err(e) = conn.execute("DELETE FROM book_move WHERE hash = ?1", params![hash]) {
-            eprintln!("Error clearing book rows for {}: {}", hash, e);
+        let delete_sql = format!("DELETE FROM {} WHERE hash = ?1", store.moves_table());
+        if let Err(e) = conn.execute(&delete_sql, params![hash]) {
+            eprintln!("Error clearing {} rows for {}: {}", store.label(), hash, e);
             continue;
         }
         let mut ok = true;
         for bm in &entry.moves {
-            if let Err(e) = conn.execute(
-                "INSERT INTO book_move (hash, rank, move, score, depth, eval_version)
+            let insert_sql = format!(
+                "INSERT INTO {} (hash, rank, move, score, depth, eval_version)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                store.moves_table()
+            );
+            if let Err(e) = conn.execute(
+                &insert_sql,
                 params![hash, bm.rank, bm.move_repr, bm.score, bm.depth, bm.eval_version],
             ) {
-                eprintln!("Error writing book row for {}: {}", hash, e);
+                eprintln!("Error writing {} row for {}: {}", store.label(), hash, e);
                 ok = false;
                 break;
             }
@@ -309,14 +415,14 @@ pub fn save_book_entries(book: &Book, hashes: &[String]) -> Result<(), BookError
         }
 
         let Some(fen) = &entry.fen else { continue };
-        write_position(&conn, hash, fen, entry.ply);
+        write_position(&conn, hash, fen, entry.ply, store);
     }
 
     if let Err(e) = conn.execute_batch("COMMIT") {
         let _ = conn.execute_batch("ROLLBACK");
         return Err(e.into());
     }
-    eprintln!("Saved {} positions to the book.", written);
+    eprintln!("Saved {} positions to the {}.", written, store.label());
     Ok(())
 }
 
@@ -328,9 +434,10 @@ pub fn save_book_entries(book: &Book, hashes: &[String]) -> Result<(), BookError
 /// rather than swallowed. A differing **ply** is ordinary: the position was reached by a
 /// different move order. The minimum wins, because that is how early the position can
 /// actually appear in a game, which is what a book-expansion frontier wants to sort by.
-fn write_position(conn: &Connection, hash: &str, fen: &str, ply: Option<i32>) {
+fn write_position(conn: &Connection, hash: &str, fen: &str, ply: Option<i32>, store: Store) {
+    let table = store.positions_table();
     let inserted = conn.execute(
-        "INSERT OR IGNORE INTO position (hash, fen, ply) VALUES (?1, ?2, ?3)",
+        &format!("INSERT OR IGNORE INTO {} (hash, fen, ply) VALUES (?1, ?2, ?3)", table),
         params![hash, fen, ply],
     );
     match inserted {
@@ -343,7 +450,7 @@ fn write_position(conn: &Connection, hash: &str, fen: &str, ply: Option<i32>) {
     }
 
     let existing: Result<(String, Option<i32>), _> = conn.query_row(
-        "SELECT fen, ply FROM position WHERE hash = ?1",
+        &format!("SELECT fen, ply FROM {} WHERE hash = ?1", table),
         params![hash],
         |row| Ok((row.get(0)?, row.get(1)?)),
     );
@@ -367,7 +474,7 @@ fn write_position(conn: &Connection, hash: &str, fen: &str, ply: Option<i32>) {
     };
     if improves {
         if let Err(e) = conn.execute(
-            "UPDATE position SET ply = ?1 WHERE hash = ?2",
+            &format!("UPDATE {} SET ply = ?1 WHERE hash = ?2", table),
             params![ply, hash],
         ) {
             eprintln!("Error updating ply for {}: {}", hash, e);
