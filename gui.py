@@ -20,7 +20,8 @@ import pygame
 
 from config import (BOARD_SIZE, BOARD_COLORS, HIGHLIGHT_COLORS, PANEL_COLORS, WHITE, BLACK)
 from pieces import EMPTY_SQUARE, PROMOTION_PIECES_WHITE_STR, PROMOTION_PIECES_BLACK_STR, PIECE_TO_SYMBOL
-from utils import get_piece_color, piece_to_lower
+from utils import (coords_to_algebraic, format_score, get_piece_color, piece_to_lower,
+                   score_advantage)
 
 pygame.init()
 
@@ -267,17 +268,35 @@ def draw_board_overlays(screen, layout, view, ui):
                     (color[0], color[1], color[2], int(color[3] * strength)))
 
 
-def draw_hint(screen, layout, hint_move, flipped):
+# Rank 1 is drawn full strength; every rank below it is dimmed and thinned by this
+# factor, compounding. Two lines at equal weight read as two recommendations rather
+# than a ranking, which is exactly what a MultiPV list is not.
+_RANK_FADE = 0.62
+
+
+def _fade(color, amount):
+    return tuple(int(c * amount) for c in color[:3])
+
+
+def draw_hint_line(screen, layout, hint_move, flipped, rank=0):
+    """One ranked hint. `rank` 0 is the engine's first choice."""
     if not hint_move:
         return
+    strength = _RANK_FADE ** rank
+    arrow = _fade(HIGHLIGHT_COLORS['hint_arrow'], strength)
+
     if hint_move[0] == 'drop':
         rect = layout.square_rect(*hint_move[2], flipped)
-        _alpha_rect(screen, rect, HIGHLIGHT_COLORS['hint_to'])
-        pygame.draw.rect(screen, HIGHLIGHT_COLORS['hint_arrow'][:3], rect, layout.s(3))
+        tint = HIGHLIGHT_COLORS['hint_to']
+        _alpha_rect(screen, rect, (tint[0], tint[1], tint[2], int(tint[3] * strength)))
+        pygame.draw.rect(screen, arrow, rect, max(1, int(layout.s(3) * strength)))
+        _rank_pip(screen, layout, rect.topleft, rank, arrow)
         return
 
-    _alpha_rect(screen, layout.square_rect(*hint_move[0], flipped), HIGHLIGHT_COLORS['hint_from'])
-    _alpha_rect(screen, layout.square_rect(*hint_move[1], flipped), HIGHLIGHT_COLORS['hint_to'])
+    for square, key in ((hint_move[0], 'hint_from'), (hint_move[1], 'hint_to')):
+        tint = HIGHLIGHT_COLORS[key]
+        _alpha_rect(screen, layout.square_rect(*square, flipped),
+                    (tint[0], tint[1], tint[2], int(tint[3] * strength)))
 
     sx, sy = layout.square_center(*hint_move[0], flipped)
     ex, ey = layout.square_center(*hint_move[1], flipped)
@@ -290,15 +309,34 @@ def draw_hint(screen, layout, hint_move, flipped):
     sx, sy = sx + ux * trim, sy + uy * trim
     ex, ey = ex - ux * trim, ey - uy * trim
 
-    color = HIGHLIGHT_COLORS['hint_arrow'][:3]
-    pygame.draw.line(screen, color, (int(sx), int(sy)), (int(ex), int(ey)), layout.s(6))
-    head = layout.s(15)
+    pygame.draw.line(screen, arrow, (int(sx), int(sy)), (int(ex), int(ey)),
+                     max(2, int(layout.s(6) * strength)))
+    head = max(layout.s(7), int(layout.s(15) * strength))
     angle = math.atan2(dy, dx)
-    pygame.draw.polygon(screen, color, [
+    pygame.draw.polygon(screen, arrow, [
         (int(ex), int(ey)),
         (int(ex - head * math.cos(angle - 0.5)), int(ey - head * math.sin(angle - 0.5))),
         (int(ex - head * math.cos(angle + 0.5)), int(ey - head * math.sin(angle + 0.5))),
     ])
+    _rank_pip(screen, layout, layout.square_rect(*hint_move[1], flipped).topleft, rank, arrow)
+
+
+def _rank_pip(screen, layout, topleft, rank, color):
+    """Number the arrow when there is more than one — an unlabelled second arrow
+    is indistinguishable from a stale first one."""
+    if rank <= 0:
+        return
+    r = layout.s(9)
+    center = (topleft[0] + r + layout.s(3), topleft[1] + r + layout.s(3))
+    pygame.draw.circle(screen, (18, 18, 20), center, r)
+    pygame.draw.circle(screen, color, center, r, max(1, layout.s(2)))
+    _text(screen, str(rank + 1), get_font(layout.font_size(11), bold=True), WHITE, center=center)
+
+
+def draw_hint(screen, layout, ranked, flipped):
+    """Draw the whole hint list, weakest first so rank 1 lands on top."""
+    for rank in range(len(ranked) - 1, -1, -1):
+        draw_hint_line(screen, layout, ranked[rank][0], flipped, rank)
 
 
 def draw_drag(screen, layout, ui):
@@ -401,6 +439,50 @@ def _draw_spinner(screen, layout, center, radius, phase, color):
     pygame.draw.arc(screen, color, box, start, start + 1.9, max(2, layout.s(3)))
 
 
+def _draw_eval(screen, layout, rect, ui):
+    """White-relative score: a saturating bar plus the number that produced it.
+
+    The sign never depends on whose turn it is — positive is White, always — which is
+    the convention every score crossing the PyO3 boundary already uses. Flipping it
+    per side would make the bar jitter on every half-move for no new information.
+
+    `ui.score_source` says where the number came from, because "static" and "depth 10"
+    are not the same claim and a bar cannot tell them apart.
+    """
+    pygame.draw.rect(screen, PANEL_COLORS['raised'], rect, border_radius=layout.s(6))
+    score = ui.score
+
+    label_font = get_font(layout.font_size(14), bold=True)
+    text = format_score(score)
+    color = PANEL_COLORS['text_dim'] if score is None else (
+        PANEL_COLORS['good'] if score > 30 else
+        PANEL_COLORS['bad'] if score < -30 else PANEL_COLORS['text'])
+    value_rect = _text(screen, text, label_font, color,
+                       midleft=(rect.x + layout.s(12), rect.centery))
+
+    source_font = get_font(layout.font_size(11))
+    source_rect = _text(screen, ui.score_source, source_font, PANEL_COLORS['text_faint'],
+                        midright=(rect.right - layout.s(10), rect.centery))
+
+    # Bar fills the gap between the two labels; it is the first thing read, so it
+    # gets whatever width is left rather than a fixed slice.
+    bar_x = value_rect.right + layout.s(10)
+    bar_w = source_rect.left - layout.s(10) - bar_x
+    if bar_w < layout.s(30):
+        return
+    bar = pygame.Rect(bar_x, rect.centery - layout.s(4), bar_w, layout.s(8))
+    pygame.draw.rect(screen, (24, 23, 22), bar, border_radius=layout.s(4))
+    mid = bar.centerx
+    advantage = score_advantage(score)
+    fill_w = int(abs(advantage) * (bar.w / 2))
+    if fill_w >= 1:
+        side = pygame.Rect(mid, bar.y, fill_w, bar.h) if advantage > 0 else \
+            pygame.Rect(mid - fill_w, bar.y, fill_w, bar.h)
+        pygame.draw.rect(screen, (236, 234, 230) if advantage > 0 else (96, 94, 92),
+                         side, border_radius=layout.s(4))
+    pygame.draw.line(screen, PANEL_COLORS['text_faint'], (mid, bar.y), (mid, bar.bottom - 1))
+
+
 def _draw_header(screen, layout, view, ui):
     panel_x, width = layout.header.x, layout.header.w
     y = layout.header.y
@@ -426,6 +508,10 @@ def _draw_header(screen, layout, view, ui):
           midright=(card.right - layout.s(12), card.centery))
     y = card.bottom + layout.s(6)
 
+    # Eval row.
+    _draw_eval(screen, layout, pygame.Rect(panel_x, y, width, layout.eval_h), ui)
+    y += layout.eval_h + layout.s(6)
+
     # Engine row — the fix for "the app looks frozen". Always says what the
     # engine is doing and, once past a second, how long it has been doing it.
     row = pygame.Rect(panel_x, y, width, layout.s(30))
@@ -443,12 +529,20 @@ def _draw_header(screen, layout, view, ui):
         pygame.draw.rect(screen, (52, 44, 66), row, border_radius=layout.s(6))
         _draw_spinner(screen, layout, (row.x + layout.s(16), row.centery), layout.s(8),
                       ui.anim_phase * 3.0, HIGHLIGHT_COLORS['hint_active'])
-        _text(screen, "Finding a hint…", get_font(layout.font_size(14)),
+        lines = "a hint" if ui.hint_lines == 1 else f"{ui.hint_lines} hint lines"
+        elapsed = ui.hint_elapsed
+        label = f"Finding {lines}… {elapsed:0.1f}s" if elapsed >= 1.0 else f"Finding {lines}…"
+        _text(screen, label, get_font(layout.font_size(14)),
               HIGHLIGHT_COLORS['hint_active'], midleft=(row.x + layout.s(32), row.centery))
+        _text(screen, f"depth {ui.hint_depth}", get_font(layout.font_size(12)),
+              PANEL_COLORS['text_dim'], midright=(row.right - layout.s(10), row.centery))
     elif ui.show_hint and ui.hint_move:
         pygame.draw.rect(screen, (52, 44, 66), row, border_radius=layout.s(6))
         _text(screen, f"Hint: {ui.hint_text}", get_font(layout.font_size(14), bold=True),
               HIGHLIGHT_COLORS['hint_active'], midleft=(row.x + layout.s(12), row.centery))
+        if len(ui.hint_ranked) > 1:
+            _text(screen, f"+{len(ui.hint_ranked) - 1} more", get_font(layout.font_size(12)),
+                  PANEL_COLORS['text_dim'], midright=(row.right - layout.s(10), row.centery))
     else:
         pygame.draw.circle(screen, PANEL_COLORS['text_faint'],
                            (row.x + layout.s(6), row.centery), layout.s(3))
@@ -484,21 +578,115 @@ def _draw_controls(screen, layout, ui, hits):
            badge_color=(74, 48, 120) if ui.show_hint else (54, 52, 58))
     button('toggle_flip', layout.button_grid(2, 1), "Flip board", HIGHLIGHT_COLORS['neutral'])
 
-    # Depth stepper: two square steps around a wide readout.
-    row = layout.button_grid(3, 0, span=2)
-    step = layout.btn_h
-    minus = pygame.Rect(row.x, row.y, step, step)
-    plus = pygame.Rect(row.right - step, row.y, step, step)
-    middle = pygame.Rect(minus.right + layout.s(6), row.y,
-                         plus.left - minus.right - layout.s(12), step)
+    _draw_stepper(screen, layout, hits, mouse, row=3, name='depth',
+                  title=f"Depth {ui.depth}", note=ui.depth_label,
+                  at_min=not ui.can_depth_down, at_max=not ui.can_depth_up)
+    _draw_stepper(screen, layout, hits, mouse, row=4, name='lines',
+                  title=f"{ui.hint_lines} hint line" + ("" if ui.hint_lines == 1 else "s"),
+                  note=ui.hint_lines_label,
+                  at_min=not ui.can_lines_down, at_max=not ui.can_lines_up,
+                  muted=not ui.show_hint)
 
-    button('depth_down', minus, "‹", HIGHLIGHT_COLORS['neutral'], enabled=ui.can_depth_down)
-    button('depth_up', plus, "›", HIGHLIGHT_COLORS['neutral'], enabled=ui.can_depth_up)
+    # The only thing in this window that writes to book_move. The badge answers the
+    # question a curator actually has in front of a position — is this line already in
+    # my repertoire? — which the in-memory book cannot answer once the analysis cache is
+    # merged into it, since both stores share one map.
+    button('save_book', layout.button_grid(5, 0, span=2), "Save position to book",
+           HIGHLIGHT_COLORS['trainer'], enabled=ui.can_save_book,
+           badge="IN BOOK" if ui.in_book else "SAVE",
+           badge_color=(24, 84, 48) if ui.in_book else (18, 74, 74))
+
+
+def _draw_stepper(screen, layout, hits, mouse, *, row, name, title, note,
+                  at_min, at_max, muted=False):
+    """A − value + control.
+
+    The end buttons stay in `hits` even at the end of their ladder. The old build
+    dropped them, so clicking "›" at the top of the depth ladder did nothing at all
+    and the whole control read as broken; registered, the click reaches `set_depth`
+    and gets an answer ("Depth 10 is the deepest setting") instead of silence.
+    """
+    whole, minus, middle, plus = layout.stepper_parts(row)
+    hits['wheel'][name] = whole
+
+    for btn_name, rect, glyph, at_end in (
+            (f'{name}_down', minus, "−", at_min), (f'{name}_up', plus, "+", at_max)):
+        hovered = rect.collidepoint(mouse)
+        bg = (44, 42, 40) if at_end else HIGHLIGHT_COLORS['button']
+        if hovered and not at_end:
+            bg = HIGHLIGHT_COLORS['button_hover']
+        pygame.draw.rect(screen, bg, rect, border_radius=layout.s(6))
+        if not at_end:
+            pygame.draw.rect(screen, PANEL_COLORS['border'], rect, 1, border_radius=layout.s(6))
+        _text(screen, glyph, get_font(layout.font_size(20), bold=True),
+              PANEL_COLORS['text_faint'] if at_end else WHITE, center=rect.center)
+        hits['buttons'][btn_name] = rect
+
     pygame.draw.rect(screen, PANEL_COLORS['raised'], middle, border_radius=layout.s(6))
-    _text(screen, f"Depth {ui.depth}", get_font(layout.font_size(14), bold=True),
-          PANEL_COLORS['text'], midleft=(middle.x + layout.s(10), middle.centery))
-    _text(screen, ui.depth_label, get_font(layout.font_size(12)), PANEL_COLORS['text_dim'],
+    pygame.draw.rect(screen, PANEL_COLORS['border'], middle, 1, border_radius=layout.s(6))
+    title_color = PANEL_COLORS['text_dim'] if muted else PANEL_COLORS['text']
+    _text(screen, title, get_font(layout.font_size(14), bold=True), title_color,
+          midleft=(middle.x + layout.s(10), middle.centery))
+    note_font = get_font(layout.font_size(12))
+    _text(screen, _clip_text(note, note_font, middle.w // 2), note_font,
+          PANEL_COLORS['text_faint'] if muted else PANEL_COLORS['text_dim'],
           midright=(middle.right - layout.s(10), middle.centery))
+
+
+def _draw_analysis(screen, layout, ui):
+    """The ranked hint lines, one row each, with the score the search returned.
+
+    The band is only as tall as `hint_lines` asked for (layout.analysis_rows), so a
+    search that comes back with fewer lines than requested leaves blank rows rather
+    than resizing the panel under the cursor.
+    """
+    area = layout.analysis
+    if not area.h:
+        return
+    pygame.draw.rect(screen, PANEL_COLORS['raised_alt'], area, border_radius=layout.s(6))
+    pygame.draw.rect(screen, PANEL_COLORS['border'], area, 1, border_radius=layout.s(6))
+
+    head_h = layout.s(22)
+    _text(screen, "HINT LINES", get_font(layout.font_size(11), bold=True),
+          PANEL_COLORS['text_faint'],
+          midleft=(area.x + layout.s(8), area.y + head_h // 2))
+    _text(screen, f"depth {ui.hint_depth}", get_font(layout.font_size(11)),
+          PANEL_COLORS['text_faint'],
+          midright=(area.right - layout.s(8), area.y + head_h // 2))
+
+    ranked = ui.hint_ranked
+    if not ranked:
+        note = ("Finding a hint…" if ui.hint_pending else
+                "Hints are off" if not ui.show_hint else "No suggestion yet")
+        _text(screen, note, get_font(layout.font_size(12)), PANEL_COLORS['text_faint'],
+              midleft=(area.x + layout.s(10), area.y + head_h + layout.analysis_row_h // 2))
+        return
+
+    move_font = get_font(layout.font_size(13), bold=True, family='consolas')
+    score_font = get_font(layout.font_size(12), family='consolas')
+    for index in range(min(len(ranked), layout.analysis_rows)):
+        move, score = ranked[index]
+        row = pygame.Rect(area.x + layout.s(4), area.y + head_h + index * layout.analysis_row_h,
+                          area.w - layout.s(8), layout.analysis_row_h)
+        strength = _RANK_FADE ** index
+        color = _fade(HIGHLIGHT_COLORS['hint_arrow'], max(0.55, strength))
+        _text(screen, f"{index + 1}.", get_font(layout.font_size(11)), PANEL_COLORS['text_faint'],
+              midleft=(row.x + layout.s(4), row.centery))
+        _text(screen, _clip_text(_move_text(move), move_font, row.w // 2), move_font, color,
+              midleft=(row.x + layout.s(22), row.centery))
+        _text(screen, format_score(score), score_font, PANEL_COLORS['text_dim'],
+              midright=(row.right - layout.s(6), row.centery))
+
+
+def _move_text(move):
+    """Move list notation. Drops read `N@a6`, matching main.Game.notation."""
+    if not move:
+        return "—"
+    if move[0] == 'drop':
+        return f"{move[1][1].upper()}@{coords_to_algebraic(*move[2])}"
+    start, end, promotion = move
+    text = f"{coords_to_algebraic(*start)}{coords_to_algebraic(*end)}"
+    return text + (f"={promotion.upper()}" if promotion else "")
 
 
 def _draw_movelist(screen, layout, ui, hits):
@@ -599,6 +787,7 @@ def draw_panel(screen, layout, view, ui, hits):
                      (layout.panel.x, 0), (layout.panel.x, layout.win_h), 1)
     _draw_header(screen, layout, view, ui)
     _draw_controls(screen, layout, ui, hits)
+    _draw_analysis(screen, layout, ui)
     _draw_movelist(screen, layout, ui, hits)
     _draw_toast(screen, layout, ui)
 
@@ -688,12 +877,12 @@ def draw_frame(screen, layout, view, ui):
     Hit regions are produced by the same code that draws them, so a control can
     never be clickable somewhere it is not visible.
     """
-    hits = {'buttons': {}, 'hand': {}, 'promotion': {}, 'movelist': {}}
+    hits = {'buttons': {}, 'hand': {}, 'promotion': {}, 'movelist': {}, 'wheel': {}}
     screen.fill(PANEL_COLORS['bg'])
 
     draw_board(screen, layout, ui.flipped)
-    if ui.show_hint and ui.hint_move and not ui.browsing:
-        draw_hint(screen, layout, ui.hint_move, ui.flipped)
+    if ui.show_hint and ui.hint_ranked and not ui.browsing:
+        draw_hint(screen, layout, ui.hint_ranked, ui.flipped)
     draw_board_overlays(screen, layout, view, ui)
     draw_pieces(screen, layout, view.board, ui.flipped,
                 skip=ui.drag['origin'] if ui.drag and ui.drag.get('origin') else None)
@@ -705,7 +894,7 @@ def draw_frame(screen, layout, view, ui):
     if view.needs_promotion:
         # Modal: drop every hit region collected so far so nothing underneath is
         # clickable while the picker is up.
-        hits = {'buttons': {}, 'hand': {}, 'promotion': {}, 'movelist': {}}
+        hits = {'buttons': {}, 'hand': {}, 'promotion': {}, 'movelist': {}, 'wheel': {}}
         draw_promotion(screen, layout, view, hits)
 
     draw_drag(screen, layout, ui)

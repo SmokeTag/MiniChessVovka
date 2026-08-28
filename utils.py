@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from config import BOARD_SIZE
+from config import BOARD_SIZE, EVAL_BAR_CLAMP, MATE_SCORE_CUTOFF, PAWN_UNIT
 from pieces import EMPTY_SQUARE
 
 # --- Helper Functions ---
@@ -57,3 +57,32 @@ def is_same_move(move1, move2):
            isinstance(move1[1], tuple) and isinstance(move2[1], tuple):
              return move1[0] == move2[0] and move1[1] == move2[1]
     return False
+
+def format_score(score):
+    """White-relative engine score as display text.
+
+    Positive favours White, whichever side is to move — that is the convention every
+    score crossing the PyO3 boundary already uses (see `search::find_best_move`), and
+    keeping it means the readout does not flip sign every half-move.
+
+    eval.rs encodes a forced mate as a flat ±CHECKMATE_SCORE with no distance in it,
+    so there is no "M3" to print: anything past the cutoff reads "White mates".
+    """
+    if score is None:
+        return "—"
+    if score >= MATE_SCORE_CUTOFF:
+        return "White mates"
+    if score <= -MATE_SCORE_CUTOFF:
+        return "Black mates"
+    return f"{score / PAWN_UNIT:+.2f}"
+
+
+def score_advantage(score):
+    """Score as a fraction in [-1, 1] for the eval bar. +1 is winning for White."""
+    if score is None:
+        return 0.0
+    if score >= MATE_SCORE_CUTOFF:
+        return 1.0
+    if score <= -MATE_SCORE_CUTOFF:
+        return -1.0
+    return max(-1.0, min(1.0, score / EVAL_BAR_CLAMP))

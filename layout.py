@@ -14,6 +14,11 @@ order:
    button is always where the user last saw it.
 2. **Hands live beside the board**, not in the panel — a strip above and a strip
    below. They follow board orientation, so the strip nearest you is always yours.
+
+The one band whose height is not a constant is the analysis list, which is sized from
+`analysis_rows` — how many hint lines the user asked for. That is a *setting*, not live
+search state, so the band still cannot resize while a search is running; changing it
+rebuilds the Layout, and only the move list below absorbs the difference.
 """
 
 import pygame
@@ -43,7 +48,7 @@ def clamp(value, low, high):
 class Layout:
     """Immutable geometry for one window size. Recreate it on resize."""
 
-    def __init__(self, win_w, win_h):
+    def __init__(self, win_w, win_h, analysis_rows=0):
         self.win_w = win_w = max(MIN_WIN_W, int(win_w))
         self.win_h = win_h = max(MIN_WIN_H, int(win_h))
 
@@ -82,14 +87,24 @@ class Layout:
         self.btn_gap = btn_gap = self.s(7)
         self.row_h = self.s(22)
 
-        # Header: title, turn row, engine-status row.
-        header_h = self.s(26) + self.s(34) + self.s(30) + 3 * self.s(6)
+        # Header: title, turn row, eval row, engine-status row.
+        self.eval_h = eval_h = self.s(30)
+        header_h = self.s(26) + self.s(34) + eval_h + self.s(30) + 4 * self.s(6)
         self.header = pygame.Rect(inner_x, pad, inner_w, header_h)
 
-        # Controls: 4 button rows. Fixed height, so the move list below can never
+        # Controls: 6 button rows. Fixed height, so the move list below can never
         # push them and they can never push it.
-        controls_h = 4 * btn_h + 3 * btn_gap
+        controls_h = 6 * btn_h + 5 * btn_gap
         self.controls = pygame.Rect(inner_x, self.header.bottom + self.s(10), inner_w, controls_h)
+
+        # Analysis band: one row per requested hint line, plus a header. Zero rows
+        # collapses it to nothing so the move list gets the pixels back.
+        self.analysis_rows = max(0, int(analysis_rows))
+        self.analysis_row_h = self.s(22)
+        analysis_h = (self.s(22) + self.analysis_rows * self.analysis_row_h + self.s(8)
+                      if self.analysis_rows else 0)
+        self.analysis = pygame.Rect(inner_x, self.controls.bottom + self.s(10),
+                                    inner_w, analysis_h)
 
         # Toast / status band, pinned to the bottom edge and always reserved even
         # when empty — otherwise the move list would resize as messages come and go.
@@ -97,7 +112,7 @@ class Layout:
         self.toast = pygame.Rect(inner_x, win_h - pad - toast_h, inner_w, toast_h)
 
         # Move list absorbs every remaining pixel.
-        list_top = self.controls.bottom + self.s(10)
+        list_top = (self.analysis.bottom if analysis_h else self.controls.bottom) + self.s(10)
         self.movelist = pygame.Rect(inner_x, list_top, inner_w,
                                     max(self.s(40), self.toast.top - self.s(10) - list_top))
         self.movelist_row_h = self.s(21)
@@ -153,3 +168,17 @@ class Layout:
         w = cell_w * span + gap * (span - 1)
         y = self.controls.y + row * (self.btn_h + gap)
         return pygame.Rect(int(x), int(y), int(w), self.btn_h)
+
+    def stepper_parts(self, row):
+        """(whole_row, minus_rect, readout_rect, plus_rect) for a ‹ value › control.
+
+        Both the renderer and the wheel hit-test need these, and they must agree —
+        computing them twice is how a control ends up clickable where it is not drawn.
+        """
+        whole = self.button_grid(row, 0, span=2)
+        step = self.btn_h
+        minus = pygame.Rect(whole.x, whole.y, step, step)
+        plus = pygame.Rect(whole.right - step, whole.y, step, step)
+        middle = pygame.Rect(minus.right + self.s(6), whole.y,
+                             plus.left - minus.right - self.s(12), step)
+        return whole, minus, middle, plus

@@ -23,13 +23,13 @@ import pygame
 
 import ai
 import settings
-from config import FPS, IDLE_FPS, HINT_MAX_DEPTH, MIN_MOVE_DISPLAY, PANEL_COLORS
+from config import FPS, IDLE_FPS, MIN_MOVE_DISPLAY, PANEL_COLORS
 from gamestate import GameState
 from gui import draw_frame, load_images
 from layout import DEFAULT_WIN_H, DEFAULT_WIN_W, Layout, MIN_WIN_H, MIN_WIN_W
 from pieces import EMPTY_SQUARE
 from thread_utils import AIThread, HintThread
-from utils import coords_to_algebraic, format_move_for_print, get_piece_color
+from utils import coords_to_algebraic, format_move_for_print, format_score, get_piece_color
 
 DRAG_THRESHOLD = 5          # pixels before a press becomes a drag
 FLASH_DURATION = 0.45       # seconds an illegal-click flash stays on screen
@@ -67,8 +67,15 @@ class UIState:
         self.hover_square = None
         self.flashes = []
         self.show_hint = bool(prefs['show_hint'])
-        self.hint_move = None
+        self.hint_lines = prefs['hint_lines']
+        self.hint_ranked = []        # [(move, white_relative_score)], best-first
         self.hint_pending = False
+        self.hint_depth = prefs['ai_depth']
+        self.hint_started = 0.0
+        self.score = None            # white-relative; None until something computes one
+        self.score_source = "—"
+        self.can_save_book = False   # is there a searched entry for this position?
+        self.in_book = False         # does this position already have a book_move row?
         self.thinking = False
         self.think_started = 0.0
         self.think_depth = prefs['ai_depth']
@@ -100,6 +107,10 @@ class UIState:
         return time.time() - self.think_started if self.thinking else 0.0
 
     @property
+    def hint_elapsed(self):
+        return time.time() - self.hint_started if self.hint_pending else 0.0
+
+    @property
     def depth_label(self):
         return settings.DEPTH_LABELS.get(self.depth, "")
 
@@ -110,6 +121,28 @@ class UIState:
     @property
     def can_depth_down(self):
         return self.depth > settings.DEPTH_CHOICES[0]
+
+    @property
+    def hint_lines_label(self):
+        return settings.HINT_LINE_LABELS.get(self.hint_lines, "")
+
+    @property
+    def can_lines_up(self):
+        return self.hint_lines < settings.HINT_LINE_CHOICES[-1]
+
+    @property
+    def can_lines_down(self):
+        return self.hint_lines > settings.HINT_LINE_CHOICES[0]
+
+    @property
+    def analysis_rows(self):
+        """Rows the analysis band reserves. Zero collapses it — hints off means the
+        move list gets the pixels back."""
+        return self.hint_lines if self.show_hint else 0
+
+    @property
+    def hint_move(self):
+        return self.hint_ranked[0][0] if self.hint_ranked else None
 
     @property
     def hint_text(self):
@@ -144,7 +177,9 @@ class UIState:
         if self.selected_square:
             return (f"{coords_to_algebraic(*self.selected_square)} selected\n"
                     "click a target, drag it, or press Esc", PANEL_COLORS['text_dim'])
-        return ("← → history · U undo · F flip · H hint", PANEL_COLORS['text_faint'])
+        return ("← → history · U undo · F flip · H hint\n"
+                "+ − depth · [ ] hint lines · wheel over either",
+                PANEL_COLORS['text_faint'])
 
 
 class Game:
@@ -165,12 +200,14 @@ class Game:
                                      # asked about stops being the current one
         self.last_move_at = 0.0
         self.check_cache = {}
+        self.analysis_loaded = 0
         self.running = True
         self.dirty = True
 
         self.screen = None
         self.layout = None
-        self.hits = {'buttons': {}, 'hand': {}, 'promotion': {}, 'movelist': {}}
+        self.hits = {'buttons': {}, 'hand': {}, 'promotion': {}, 'movelist': {},
+                     'wheel': {}}
 
     # --- setup -------------------------------------------------------------
 
@@ -196,7 +233,19 @@ class Game:
     def resize(self, width, height):
         width, height = max(MIN_WIN_W, width), max(MIN_WIN_H, height)
         self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
-        self.layout = Layout(width, height)
+        self.layout = Layout(width, height, self.ui.analysis_rows)
+        self.dirty = True
+
+    def relayout(self):
+        """Rebuild the geometry after a setting that changes a band's height.
+
+        Only the analysis band is sized from a setting, and it sits below the
+        controls — so this can never move a button out from under the cursor. The
+        window itself is untouched, unlike `resize`.
+        """
+        if self.layout is None:
+            return
+        self.layout = Layout(self.layout.win_w, self.layout.win_h, self.ui.analysis_rows)
         self.dirty = True
 
     def save_prefs(self):
@@ -207,6 +256,7 @@ class Game:
             'white_ai': self.ui.ai_white,
             'black_ai': self.ui.ai_black,
             'show_hint': self.ui.show_hint,
+            'hint_lines': self.ui.hint_lines,
             'board_flipped': self.ui.flipped,
         })
         settings.save(self.prefs)
@@ -229,9 +279,95 @@ class Game:
         self.ui.drop_targets = []
         self.ui.drag = None
         if clear_hint:
-            self.ui.hint_move = None
+            self.ui.hint_ranked = []
             self.ui.hint_pending = False
+        # The score described the position we just left. Fall back to the static
+        # evaluation of the new one rather than leaving a stale search number up.
+        self.refresh_static_score()
+        self.refresh_book_state()
         self.check_cache.clear()
+        self.dirty = True
+
+    def refresh_static_score(self):
+        """Show `eval.rs`'s static evaluation until a search replaces it.
+
+        Cheap enough to run on every position change — it is the same function the
+        search calls at a leaf — and it means the readout is never blank. A search
+        result overwrites it and says so, because "static" and "depth 10" are very
+        different claims about the same number.
+        """
+        if self.game_finished():
+            self.ui.score, self.ui.score_source = None, "game over"
+            return
+        try:
+            self.ui.score = int(ai.evaluate_position(self.gs))
+            self.ui.score_source = "static"
+        except Exception as exc:                        # never let the readout crash a frame
+            print(f"[eval] static evaluation failed: {exc}")
+            self.ui.score, self.ui.score_source = None, "—"
+
+    def flush_analysis(self):
+        """Persist what this session has searched into the analysis tables.
+
+        Never touches `book_move` — that is `save_to_book` alone. Called after each
+        search lands and once on the way out, so a session's exploration survives a
+        crash as well as a clean quit.
+        """
+        try:
+            return ai.save_analysis_to_db()
+        except Exception as exc:
+            print(f"[analysis] could not flush the cache: {exc}")
+            return 0
+
+    def refresh_book_state(self):
+        """Whether the Save button has anything to file, and how much is unsaved.
+
+        Recomputed on position change and when a search lands, not per frame: it costs
+        a Rust state rebuild and a hash, and neither can change in between.
+        """
+        try:
+            self.ui.can_save_book = ai.book_has_position(self.gs)
+            self.ui.in_book = ai.book_has_row(self.gs)
+        except Exception as exc:
+            print(f"[book] could not read book state: {exc}")
+            self.ui.can_save_book = self.ui.in_book = False
+
+    def save_to_book(self):
+        """File the position on screen into book.db, and say exactly what happened.
+
+        The only thing in this front end that writes to the book. It writes one row —
+        the position currently on the board — so exploring a line costs the repertoire
+        nothing until the user decides a position belongs in it.
+        """
+        if self.ui.browsing:
+            self.toast("Return to the live position before saving (End).", PANEL_COLORS['warn'])
+            return
+        if not self.ui.can_save_book:
+            self.toast("Nothing searched for this position yet —\n"
+                       "turn hints on or let the engine move first.", PANEL_COLORS['warn'])
+            return
+        try:
+            written = ai.save_position_to_book(self.gs)
+        except Exception as exc:
+            print(f"[book] save failed: {exc}")
+            self.toast(f"Could not write to the book: {exc}", PANEL_COLORS['bad'])
+            return
+        self.refresh_book_state()
+        if written:
+            side = "White" if self.gs.current_turn == 'w' else "Black"
+            self.toast(f"Saved to book — {side} to move, {self.ui.score_source}.\n"
+                       "The engine probes a row only where it is the side to move.",
+                       PANEL_COLORS['good'])
+        else:
+            self.toast("Nothing to save for this position.", PANEL_COLORS['warn'])
+        self.dirty = True
+
+    def set_search_score(self, score, depth):
+        """Record a score that a completed search stands behind."""
+        if score is None:
+            return
+        self.ui.score = int(score)
+        self.ui.score_source = f"depth {depth}"
         self.dirty = True
 
     def toast(self, text, color=None):
@@ -402,6 +538,7 @@ class Game:
         self.ui.view_ply = self.ui.live_ply = 0
         self.ui.movelist_scroll = 0
         self.ui.flashes = []
+        self.ui.hint_ranked = []
         self.last_move_at = 0.0
         self.invalidate()
         self.sync_ui()
@@ -464,20 +601,34 @@ class Game:
         self.record_move(self.gs.last_move)
         self.last_move_at = time.time()
         self.invalidate()
+        # After invalidate, which reset the readout to a static evaluation: the score
+        # the search returned is the value of the line it just played, so it still
+        # describes the position on the board. Only for the engine's own move —
+        # a random fallback or a rejected move has no search behind it.
+        if move is thread.best_move:
+            self.set_search_score(thread.score, thread.depth)
         self.sync_ui()
-        ai.save_move_cache_to_db(ai.move_cache)
+        # Deliberately no book write here. This used to flush the whole DIRTY_KEYS
+        # queue on every engine move, which meant one AI move filed every position the
+        # session had searched since the last one — hints included, exploration
+        # included. The book is a curated repertoire, so a row goes in only when the
+        # user asks for it: see `save_to_book`.
 
     def start_hint_if_needed(self):
-        if (not self.ui.show_hint or self.hint_thread or self.ui.hint_move
+        if (not self.ui.show_hint or self.hint_thread or self.ui.hint_ranked
                 or self.gs.needs_promotion_choice or self.game_finished()
                 or self.is_ai_turn()):
             return
-        depth = min(self.ui.depth, HINT_MAX_DEPTH)
-        thread = HintThread(self.gs, depth=depth)
+        # The selected depth, not a private cap: with both AI toggles off this is the
+        # only search the app runs, so clamping it here is clamping the depth control.
+        depth = self.ui.depth
+        thread = HintThread(self.gs, depth=depth, lines=self.ui.hint_lines)
         thread.generation = self.generation
         thread.start()
         self.hint_thread = thread
         self.ui.hint_pending = True
+        self.ui.hint_depth = depth
+        self.ui.hint_started = time.time()
         self.dirty = True
 
     def poll_hint(self):
@@ -487,8 +638,15 @@ class Game:
         self.hint_thread = None
         self.ui.hint_pending = False
         self.dirty = True
-        if thread.generation == self.generation:
-            self.ui.hint_move = thread.best_move
+        if thread.generation != self.generation:
+            return
+        self.ui.hint_ranked = [(move, score) for move, score in thread.ranked if move]
+        self.flush_analysis()
+        self.refresh_book_state()
+        # The hint searched the live position, so rank 1's score is a better answer
+        # than the static evaluation currently on screen.
+        if self.ui.hint_ranked:
+            self.set_search_score(self.ui.hint_ranked[0][1], thread.depth)
 
     # --- selection ---------------------------------------------------------
 
@@ -541,17 +699,57 @@ class Game:
             self.dirty = True
 
     def set_depth(self, depth):
+        """Move the engine to `depth`. Says so even when it cannot.
+
+        The stepper buttons stay clickable at both ends of the ladder (see
+        `gui._draw_stepper`): a click that changes nothing has to produce an answer,
+        or the control is indistinguishable from a broken one.
+        """
         if depth == self.ui.depth:
+            edge = "deepest" if depth == settings.DEPTH_CHOICES[-1] else "shallowest"
+            self.toast(f"Depth {depth} is the {edge} setting.", PANEL_COLORS['warn'])
             return
         self.ui.depth = self.gs.ai_depth = depth
         # A hint computed at the old depth is no longer the answer to the
         # question the depth control now asks.
-        self.ui.hint_move = None
-        self.generation += 1
-        self.hint_thread = None
-        self.ui.hint_pending = False
+        self.drop_hint()
         self.toast(f"Engine depth {depth} — {settings.DEPTH_LABELS.get(depth, '')}.",
                    PANEL_COLORS['text_dim'])
+        self.dirty = True
+
+    def set_hint_lines(self, lines):
+        """How many ranked moves the hint asks for.
+
+        Anything above 1 makes the hint a MultiPV search, which is what gives ranks
+        2+ real scores instead of alpha-beta bounds — and costs 2.4-4.4x a single-PV
+        search at the same depth, so the toast names the price.
+        """
+        if lines == self.ui.hint_lines:
+            edge = "most" if lines == settings.HINT_LINE_CHOICES[-1] else "fewest"
+            self.toast(f"{lines} is the {edge} the hint will show.", PANEL_COLORS['warn'])
+            return
+        self.ui.hint_lines = lines
+        self.drop_hint()
+        self.relayout()
+        plural = "line" if lines == 1 else "lines"
+        if not self.ui.show_hint:
+            self.toast(f"Hint shows {lines} {plural} — turn hints on to see them.",
+                       PANEL_COLORS['warn'])
+            return
+        note = settings.HINT_LINE_LABELS.get(lines, "")
+        self.toast(f"Hint shows {lines} {plural} — {note}." if note else
+                   f"Hint shows {lines} {plural}.", PANEL_COLORS['text_dim'])
+
+    def drop_hint(self):
+        """Abandon the hint on screen and the search behind it.
+
+        Bumping the generation is what makes the in-flight `HintThread` land as a
+        result for a superseded question, so it is discarded rather than applied.
+        """
+        self.ui.hint_ranked = []
+        self.ui.hint_pending = False
+        self.hint_thread = None
+        self.generation += 1
         self.dirty = True
 
     def toggle_ai(self, color):
@@ -581,9 +779,8 @@ class Game:
             self.toggle_ai('b')
         elif name == 'toggle_hint':
             self.ui.show_hint = not self.ui.show_hint
-            self.ui.hint_move = None
-            self.ui.hint_pending = False
-            self.hint_thread = None
+            self.drop_hint()
+            self.relayout()
             self.toast(f"Hints {'on' if self.ui.show_hint else 'off'}.", PANEL_COLORS['text_dim'])
         elif name == 'toggle_flip':
             self.ui.flipped = not self.ui.flipped
@@ -592,6 +789,12 @@ class Game:
             self.set_depth(settings.cycle_depth(self.ui.depth, 1))
         elif name == 'depth_down':
             self.set_depth(settings.cycle_depth(self.ui.depth, -1))
+        elif name == 'lines_up':
+            self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, 1))
+        elif name == 'lines_down':
+            self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, -1))
+        elif name == 'save_book':
+            self.save_to_book()
 
     def try_board_action(self, square):
         """A click landed on `square` while the human is to move."""
@@ -637,6 +840,23 @@ class Game:
             self.flash(square)
             side = "White" if self.gs.current_turn == 'w' else "Black"
             self.toast(f"That is not your piece — {side} to move.", PANEL_COLORS['warn'])
+
+    def handle_wheel(self, pos, step):
+        """Wheel over a stepper nudges it. Returns True if it was consumed.
+
+        The rects come from `hits['wheel']`, which the renderer fills from the same
+        `layout.stepper_parts` call it draws from — a control is never scrollable
+        where it is not visible.
+        """
+        for name, rect in self.hits.get('wheel', {}).items():
+            if not rect.collidepoint(pos):
+                continue
+            if name == 'depth':
+                self.set_depth(settings.cycle_depth(self.ui.depth, step))
+            elif name == 'lines':
+                self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, step))
+            return True
+        return False
 
     def snap_to_live(self):
         if self.ui.browsing:
@@ -757,9 +977,15 @@ class Game:
             self.set_depth(settings.cycle_depth(self.ui.depth, 1))
         elif key in (pygame.K_MINUS, pygame.K_KP_MINUS):
             self.set_depth(settings.cycle_depth(self.ui.depth, -1))
+        elif key == pygame.K_RIGHTBRACKET:
+            self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, 1))
+        elif key == pygame.K_LEFTBRACKET:
+            self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, -1))
         elif key in (pygame.K_r, pygame.K_n, pygame.K_b) and self.gs.needs_promotion_choice:
             upper = chr(key).upper()
             self.finish_promotion(upper if self.gs.current_turn == 'w' else upper.lower())
+        elif ctrl and key == pygame.K_s:
+            self.save_to_book()
         elif ctrl and key == pygame.K_q:
             self.running = False
 
@@ -787,9 +1013,11 @@ class Game:
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 self.ui.mouse_pos = event.pos
                 if event.button in (4, 5):
-                    if self.layout.movelist.collidepoint(event.pos):
-                        step = -2 if event.button == 4 else 2
-                        self.ui.movelist_scroll = max(0, self.ui.movelist_scroll + step)
+                    step = 1 if event.button == 4 else -1
+                    if self.handle_wheel(event.pos, step):
+                        pass
+                    elif self.layout.movelist.collidepoint(event.pos):
+                        self.ui.movelist_scroll = max(0, self.ui.movelist_scroll - 2 * step)
                         self.dirty = True
                 elif event.button == 1:
                     self.handle_mouse_down(event.pos, event.button)
@@ -825,11 +1053,24 @@ class Game:
 
     def run(self):
         ai.load_move_cache_from_db()
+        # Opt-in, and only here: loading the analysis cache means the engine plays from
+        # it too, which is right for a study tool and wrong for the book builder.
+        try:
+            self.analysis_loaded = ai.load_analysis_from_db()
+        except Exception as exc:
+            print(f"[analysis] could not load the cache: {exc}")
+            self.analysis_loaded = 0
 
         pygame.display.set_caption("Mini Crazyhouse 6×6")
         self.resize(*self.initial_window_size())
         load_images()
         self.sync_ui()
+        self.refresh_static_score()
+        self.refresh_book_state()
+        self.toast(f"Book {ai.book_size() - self.analysis_loaded} positions · "
+                   f"analysis cache {self.analysis_loaded}\n"
+                   "Ctrl+S files the position on screen into the book",
+                   PANEL_COLORS['text_dim'])
 
         clock = pygame.time.Clock()
         while self.running:
@@ -847,6 +1088,7 @@ class Game:
                 self.dirty = False
             clock.tick(FPS if animating else IDLE_FPS)
 
+        self.flush_analysis()
         self.save_prefs()
         pygame.quit()
 

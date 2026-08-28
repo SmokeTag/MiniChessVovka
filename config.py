@@ -11,9 +11,26 @@ IDLE_FPS = 15         # cap when nothing on screen is changing
 # latency. This pads fast moves up to a floor instead, and never blocks input.
 MIN_MOVE_DISPLAY = 0.25
 
-# Hints are advisory, so they are capped well below the engine's playing depth —
-# a 30s "Thinking…" for a hint you asked for casually is not worth the wait.
-HINT_MAX_DEPTH = 6
+# HINT_MAX_DEPTH is gone. It silently clamped the hint to 6 whatever the depth control
+# said, and with both AI toggles off the hint is the *only* search the GUI ever runs —
+# so picking depth 10 changed nothing that ever executed, and the whole depth selector
+# looked broken. The hint now searches at the selected depth: "very slow" is already
+# written on the control, the search never blocks the UI, and the elapsed time is on
+# screen while it runs. Wanting a faster hint is what lowering the depth is for.
+
+# --- Score display ---
+# Engine scores are white-relative integers in the same units as eval.rs, where a pawn
+# is PIECE_VALUES[0] == 100. Divide by this to print pawns.
+PAWN_UNIT = 100
+
+# eval.rs returns a flat ±CHECKMATE_SCORE for a forced mate — it carries no distance,
+# so the display can say "mate", never "M3". This is the same 9/10 fraction the search
+# uses to decide an iteration found one.
+MATE_SCORE_CUTOFF = 900_000
+
+# The eval bar saturates here (±10 pawns). Past that the exact number stops meaning
+# anything a bar could show, and the readout beside it still prints the real value.
+EVAL_BAR_CLAMP = 1000
 
 # --- UI Colors ---
 # Plain black and white, used directly by gui.py for piece glyphs and button text.
