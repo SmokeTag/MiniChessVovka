@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A 6×6 Crazyhouse ("minihouse") chess engine. The search/eval core is Rust (`engine_rs/`), exposed to
 Python as the `minichess_engine` extension module via PyO3. Python drives it from three front ends:
-a Pygame GUI (`main.py` + `gui.py`), a Chess.com browser bot (`play_online.py`), and self-play
-training (`src/self_play.py`, `src/scheduled_self_play.py`).
+a Pygame GUI (`main.py` + `gui.py`), a Chess.com browser bot (`play_online.py`), and the opening
+book builder (`build_book.py`).
 
 ## Build & run
 
@@ -28,9 +28,6 @@ Always invoke Python through the project venv (`./venv/bin/python`, or activate 
 
 ```bash
 ./play.sh                          # Pygame GUI (venv/bin/python main.py)
-./train.sh                         # self-play training, Ctrl+C stops gracefully
-./train_parallel.sh 20 10          # 20 self-play workers at depth 10 (see below)
-./train_status.sh ; ./train_stop.sh
 ./bot_start.sh casual|rated        # chess.com bot (needs .env + playwright chromium)
 ./bot_stop.sh ; ./monitor_bot.sh
 ./build_book_parallel.sh 20 6 10   # fill the opening book: 20 workers, to ply 6, depth 10
@@ -145,10 +142,9 @@ command picks up where it left off, and is the only "resume" mechanism there is.
 Things about *running* it that are easy to get wrong:
 
 - **Workers must run from the repo root.** `DB_PATH` in `cache.rs` is the relative string
-  `"book.db"`, so a worker started elsewhere silently creates its own DB. `build_book.py` and
-  `self_play.py` both `os.chdir` to the repo root themselves (and put it on `sys.path`; without
-  that, `python src/self_play.py` cannot import `gamestate`). This is also the only seam a test
-  has for isolating the book — see **Tests**.
+  `"book.db"`, so a worker started elsewhere silently creates its own DB. `build_book.py` does the
+  `os.chdir` itself, in `main()` rather than at import — that keeps the module importable from a
+  test, since the CWD is the only seam there is for isolating the book (see **Tests**).
 - **`build_stop.sh` signals a recorded pid, never a name.** `pkill -f build_book_parallel.sh`
   also matches the shell you typed the command into, and kills it. The driver writes `$$` to
   `book_build.pid` for exactly this reason.
@@ -177,9 +173,12 @@ for the root. Workers
 load the DB only at startup, so they do not see each other's entries until restarted — which is why
 the build is staged rather than one long run.
 
-**Self-play is not a book filler.** `src/self_play.py` and `train_parallel.sh` still exist and still
-write to the book, but pointing them at it fills ~97% of the rows with midgame positions that will
-never be reached again. Use them for playing strength work, not for the book.
+**There is no self-play any more.** `src/self_play.py`, `src/scheduled_self_play.py` and the
+`train*.sh` runners are deleted. They filled the book by playing games out, which is the thing the
+repertoire replaced: ~97% of what they wrote was midgame positions no game reaches twice, and every
+run would now corrupt a curated book. Nothing in the repo plays AI-vs-AI from a script; the closest
+things left are `tests/test_ai_optimization.py`, which plays full games, and `bench/`, which
+measures the search. (`git show 4fe0d1e:src/self_play.py` if you want it back.)
 
 **One search writes one entry.** A depth-10 search leaves exactly one `book_move` row per rank plus
 one `position` row, and nothing else. The per-iteration stores and the TT dump that used to fill
@@ -223,7 +222,7 @@ that it compiles — use `maturin develop --release` for anything you intend to 
 ## Architecture
 
 **Two independent implementations of the same rules.** `gamestate.py` (Python) owns the live game —
-GUI, bot, and training all mutate it — while `engine_rs/src/gamestate.rs` re-implements move
+GUI, bot, and book builder all mutate it — while `engine_rs/src/gamestate.rs` re-implements move
 generation for the search. `ai._sync_to_rust()` copies board/turn/hands/king_pos/promoted_pieces into
 a fresh Rust `GameState` on *every* `find_best_move` call. A rules change (a new drop restriction,
 promotion behaviour, check detection) must land in **both** or the engine will search a position the
@@ -233,9 +232,10 @@ state at every ply. Run it with `RULES_PARITY_GAMES=500` after any rules change 
 is a smoke test, not a sweep.
 
 **The Pygame front end is `main.py` + `gui.py` + `layout.py` + `settings.py`.**
-`layout.Layout` recomputes every rectangle from the current window size — nothing else may
-assume a pixel dimension, and `config.SQUARE_SIZE` survives only because `pieces.py`'s unused
-vector primitives import it. Four invariants are load-bearing and easy to undo by accident:
+`layout.Layout` recomputes every rectangle from the current window size — nothing else may assume a
+pixel dimension, and nothing does any more: `config.SQUARE_SIZE` is gone along with `pieces.py`'s
+commented-out vector primitives, which were its only importer. Four invariants are load-bearing and
+easy to undo by accident:
 
 - **The search never blocks the UI.** `main.Game` polls a worker thread and keeps drawing;
   Undo / New game / Flip / Hint stay live during a search. Results carry a `generation` tag
@@ -262,8 +262,8 @@ other region, which is what stops clicks reaching the buttons underneath it.
 
 `gui_settings.json` (gitignored) remembers window size, depth, AI toggles, hints and orientation.
 
-**`ai.py` is a thin shim, not the AI.** It exists so `gui.py`, `play_online.py`, and the training
-scripts keep a stable Python API while all real work happens in Rust. Its module-level `move_cache`
+**`ai.py` is a thin shim, not the AI.** It exists so `gui.py`, `play_online.py` and `build_book.py`
+keep a stable Python API while all real work happens in Rust. Its module-level `move_cache`
 and `tt` dicts are vestigial — the Rust side owns both the book and the TT; use `ai.book_size()` for
 a count that is actually true. `_sync_to_rust` rebuilds the Rust state on every call, so anything the
 book records about a position (currently `ply`) has to be copied there or it arrives as a default.
@@ -298,7 +298,7 @@ position(hash, fen, ply)                                  -- PK hash
   returns an error naming the on-disk version, the expected one, and how to rebuild, and touches
   nothing. It never drops, because "recreate the schema" runs on paths nobody thinks of as
   destructive (a worker's first save, a stray call from a test), and a version bump would turn any
-  of them into a silent wipe of the training data. Discarding the book is
+  of them into a silent wipe of the book. Discarding the book is
   `./venv/bin/python rebuild_book.py`, which shows what is there and asks before dropping both
   tables and stamping the new version (`--yes` skips the prompt). This replaced the old
   "no depth column → DROP TABLE" column-sniffing, which was both a guess *and* destructive.
@@ -332,10 +332,10 @@ while the TT store site classifies flags against the original window (the same h
 `search_worker`). Fixing it is a search change needing its own bench and parity pass.
 
 **Parallelism policy — deliberate, don't "fix" it.** Root-parallel search
-(`minimax_parallel` in `search.rs`) is **off by default**. Self-play training explicitly passes
-`parallel=False` and calls `ai.set_parallel_search(False)`: training scales better by running many
-independent games across cores than by parallelising one search. The parallel path is for interactive
-analysis of a single position. `find_best_move(..., parallel=True/False)` overrides per call;
+(`minimax_parallel` in `search.rs`) is **off by default**, and `build_book.py` passes
+`parallel=False` explicitly: the build scales better by running many workers on disjoint subtrees
+than by parallelising one search. The parallel path is for interactive analysis of a single
+position. `find_best_move(..., parallel=True/False)` overrides per call;
 `ai.set_parallel_search(enabled, min_depth)` sets the process default (`min_depth` = first
 iterative-deepening depth that gets split, default 3).
 
@@ -368,8 +368,6 @@ a full measure → propose → implement-in-worktrees → verify pass over this 
 - `bot_start.sh` rewrites `play_online.py` in place with `sed -i ''` to flip rated/casual — BSD syntax
   that fails on Linux (GNU sed reads `''` as the script). Set `rated=` in `create_minihouse_game` by
   hand, or fix the sed, rather than assuming the mode switched.
-- `autorun_training.sh`, `minichesstrain.service`, and `minichesstrain.timer` are pinned to a
-  deployment path (`/srv/MiniChessVovka`, user `ubuntu`) and are not runnable as-is from a checkout.
 - `nn/` and `engine/env.py` are **deleted**. They were an unfinished torch/RL experiment that nothing
   imported, and they were actively misleading as a starting point for the planned AlphaZero work:
   `nn/model.py` sized the action space as `board_size**4`, which cannot express a drop or a promotion
@@ -388,7 +386,8 @@ a full measure → propose → implement-in-worktrees → verify pass over this 
   the top of `engine_rs/src/eval.rs`. Editing the Python ones changes nothing — and editing the Rust
   ones means bumping `EVAL_VERSION` in the same file, or the book keeps serving scores from the
   evaluation you just replaced.
-- `docs/ARCHITECTURE.md` is stale and wrong (claims bitboards; the board is a list of chars).
-  `docs/evaluation_strategy.md` and the README are accurate.
+- `docs/evaluation_strategy.md` and the README are accurate. `docs/PARALLEL_SEARCH.md` is a dated
+  record of one evaluation — its §0 describes the code as it stands, §§1-5 are how the problem was
+  found, and it still names `src/self_play.py`, which no longer exists. Read it as history.
 - Console output across the Python layer is heavily print-based and partly emoji-formatted; the bot
-  and training scripts are read via their logs (`/tmp/minichess_bot.log`, `training_log.txt`).
+  and the book builder are read via their logs (`/tmp/minichess_bot.log`, `logs/book/`).

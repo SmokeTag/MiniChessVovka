@@ -10,12 +10,6 @@ book.db
 book.db.*
 book.db-*
 
-# Training
-training_log.txt
-training.pid
-training.health
-training_progress.txt
-
 # Bot runtime
 .chess_com_profile/
 .chess_com_profile_*/
@@ -64,9 +58,8 @@ win_of_*.jpg
 # Pytest
 .pytest_cache/
 
-# Parallel self-play runtime
+# Book build runtime
 logs/
-training_workers.pid
 book_workers.pid
 book_build.pid
 
