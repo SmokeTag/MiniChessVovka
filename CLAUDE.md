@@ -435,6 +435,13 @@ the binary it delta-compresses between versions, merges line by line, and is rev
   exported by default either: it is exploration, not a curated repertoire.
 - `tests/test_book_export.py` is what keeps this honest. It asserts the hashes come back, not merely
   that the file parses.
+- **`build_book_parallel.sh` refreshes `book.tsv` on the way out**, on both exit paths — a normal
+  finish and the `build_stop.sh` SIGTERM, since whatever the workers flushed before dying is real
+  work that would otherwise sit in a gitignored file with nothing recording it arrived. It **never
+  commits**: that is not a build script's call, and a build that committed on its own would
+  eventually commit a half-finished tier. `EXPORT=0` skips it. Because the export is byte-stable,
+  "book.tsv is unchanged" means the build added nothing — while `book.db` still shows as modified,
+  since SQLite churns pages on every open, which is the whole argument for tracking the text.
 
 `move_cache.db` was the predecessor and is **gone**. Nothing was migrated out of it: its hashes
 could not be turned back into FENs, and ~97% of its rows were unreachable by the depth-10 probe
