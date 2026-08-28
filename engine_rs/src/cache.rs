@@ -23,10 +23,21 @@
 //! `Store::Book` is only ever written by an explicit save, `Store::Analysis` only by a
 //! front end flushing what it searched.
 //!
-//! The analysis pair was added without bumping `SCHEMA_VERSION`. It is purely additive
-//! -- an older build never looks for those tables and reads the book exactly as before --
-//! and a bump would make `ensure_schema` refuse every book.db already on disk, whose only
-//! remedy is `rebuild_book.py`, which drops the thing being protected.
+//! The analysis pair was added at version 1 without a `SCHEMA_VERSION` bump, because it
+//! was purely additive: an older build never looks for those tables and reads the book
+//! exactly as before. Version 2 is not additive. It puts a foreign key on each move
+//! table's `hash`, referencing the position table beside it, so a ranked move can no
+//! longer be filed under a hash with no FEN to re-open it -- the defect that made the old
+//! `move_cache` unmigratable and left ~97% of it dead. Rewriting a table is not something
+//! `CREATE TABLE IF NOT EXISTS` can do, so the bump is real and `ensure_schema` refuses a
+//! version-1 file. What makes that affordable is `migrate_book.py`, which copies every
+//! row forward: the constraint changes what the schema permits, not what any row means,
+//! so nothing is re-searched.
+//!
+//! The constraint only guards the direction it names. `book_move` without `position` is
+//! now impossible; `position` without `book_move` is still legal and still happens -- SQL
+//! cannot require a parent to have children. The guard for that direction is in
+//! [`save_entries`], which refuses to run its DELETE with nothing to insert afterwards.
 //!
 //! The DB lives in `book.db`. It did not replace the old `move_cache.db` in place: that
 //! file's hashes could not be turned back into FENs, so nothing in it was migratable, and
@@ -47,7 +58,7 @@ const DB_PATH: &str = "book.db";
 /// Stored in `PRAGMA user_version`. The old code sniffed the columns of `move_cache`
 /// ("no depth column -> DROP TABLE"), a heuristic that cannot tell a schema this module
 /// has never seen from one it wrote itself. A version integer can.
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 /// Which pair of tables a read or write targets.
 ///
@@ -100,9 +111,11 @@ impl fmt::Display for BookError {
                 f,
                 "{} is at schema version {}, but this build expects {}. \
                  Nothing was changed: the book is left exactly as it is. \
-                 To discard it and start over, run `./venv/bin/python rebuild_book.py` \
-                 (drops book_move and position, stamps version {}). Every row is a pure \
-                 function of the engine and can be recomputed by re-searching.",
+                 To carry the existing rows forward, run \
+                 `./venv/bin/python migrate_book.py` (copies every row into the new \
+                 schema; no re-searching, since the scores are unchanged). To discard the \
+                 book instead, `./venv/bin/python rebuild_book.py` drops book_move and \
+                 position and stamps version {}.",
                 DB_PATH, found, expected, expected
             ),
         }
@@ -155,6 +168,11 @@ fn open_db() -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open(DB_PATH)?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+    // SQLite defaults foreign key enforcement to OFF, per connection, and the setting is
+    // not stored in the file -- so the REFERENCES clauses in `create_tables` are inert
+    // decoration unless every connection opts in here. Must be issued outside a
+    // transaction: inside one it is silently a no-op.
+    let _ = conn.pragma_update(None, "foreign_keys", true);
     conn.busy_timeout(std::time::Duration::from_secs(30))?;
     Ok(conn)
 }
@@ -232,7 +250,8 @@ fn create_tables(conn: &Connection) -> Result<(), BookError> {
             score        INTEGER NOT NULL,
             depth        INTEGER NOT NULL,
             eval_version INTEGER NOT NULL,
-            PRIMARY KEY (hash, rank)
+            PRIMARY KEY (hash, rank),
+            FOREIGN KEY (hash) REFERENCES position(hash) ON DELETE CASCADE
         )",
         [],
     )?;
@@ -245,9 +264,10 @@ fn create_tables(conn: &Connection) -> Result<(), BookError> {
         [],
     )?;
 
-    // The analysis pair. Additive, so no SCHEMA_VERSION bump: a build that predates
-    // these tables reads book_move and position exactly as it always did, and bumping
-    // would make ensure_schema refuse every book.db in existence.
+    // The analysis pair. Added at version 1 without a bump, because a build that predates
+    // these tables reads book_move and position exactly as it always did. It carries the
+    // same foreign key as the book pair from version 2 on: exploration is filed by the
+    // same code path, so it can go wrong in exactly the same way.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS analysis_move (
             hash         TEXT NOT NULL,
@@ -256,7 +276,8 @@ fn create_tables(conn: &Connection) -> Result<(), BookError> {
             score        INTEGER NOT NULL,
             depth        INTEGER NOT NULL,
             eval_version INTEGER NOT NULL,
-            PRIMARY KEY (hash, rank)
+            PRIMARY KEY (hash, rank),
+            FOREIGN KEY (hash) REFERENCES analysis_position(hash) ON DELETE CASCADE
         )",
         [],
     )?;
@@ -386,6 +407,33 @@ pub fn save_entries(book: &Book, hashes: &[String], store: Store) -> Result<(), 
         }
         let Some(entry) = book.get(hash) else { continue };
 
+        // A hash with no FEN can never be turned back into a position -- it is the defect
+        // that made `move_cache` unmigratable. Every live writer backfills the FEN before
+        // queueing (`book_store` sets it, `save_position_to_book` fills it in from the
+        // position the caller is looking at), so reaching this is a bug upstream; skip the
+        // row rather than filing an entry nothing can ever re-open.
+        let Some(fen) = &entry.fen else {
+            eprintln!(
+                "Skipping {} rows for {}: no FEN, so the hash could never be re-opened.",
+                store.label(), hash
+            );
+            continue;
+        };
+
+        // An entry with no moves must not reach the DELETE below. That statement is a
+        // *replacement*, and with nothing to insert afterwards it degrades into a plain
+        // deletion -- which is how the ply-0 root row went missing from a 10,000-entry
+        // book while the save still reported success.
+        if entry.moves.is_empty() {
+            eprintln!("Skipping {} rows for {}: entry holds no moves.", store.label(), hash);
+            continue;
+        }
+
+        // The position row is the foreign key parent, so it has to be on disk before any
+        // move row references it. It is written first for that reason -- with enforcement
+        // on and this ordering reversed, every insert below fails on a missing parent.
+        write_position(&conn, hash, fen, entry.ply, store);
+
         // Replace the whole rank list rather than upserting row by row: a re-search that
         // returns fewer ranks than last time must not leave the old tail behind, where it
         // would sit at a rank whose score came from a different search.
@@ -413,9 +461,6 @@ pub fn save_entries(book: &Book, hashes: &[String], store: Store) -> Result<(), 
         if ok {
             written += 1;
         }
-
-        let Some(fen) = &entry.fen else { continue };
-        write_position(&conn, hash, fen, entry.ply, store);
     }
 
     if let Err(e) = conn.execute_batch("COMMIT") {

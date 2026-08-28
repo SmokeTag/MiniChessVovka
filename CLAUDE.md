@@ -32,6 +32,7 @@ Always invoke Python through the project venv (`./venv/bin/python`, or activate 
 ./bot_stop.sh ; ./monitor_bot.sh
 ./build_book_parallel.sh 20 6 10   # fill the opening book: 20 workers, to ply 6, depth 10
 ./build_status.sh ; ./build_stop.sh
+./venv/bin/python migrate_book.py       # carry book.db to the current schema, keeping every row
 ./venv/bin/python rebuild_book.py       # the only thing that deletes book rows; asks first
 ```
 
@@ -164,7 +165,8 @@ Things about *running* it that are easy to get wrong:
   missing or stale book loads empty and says so. `setup_db` creates the tables when they are
   absent and **refuses** a `SCHEMA_VERSION` mismatch, naming both versions and the way out; a save
   into a foreign schema raises instead of writing, leaving the rows in memory and `DIRTY_KEYS`
-  intact so the work is still recoverable. `rebuild_book.py` is the only thing that deletes rows.
+  intact so the work is still recoverable. `rebuild_book.py` is the only thing that deletes rows
+  wholesale; `migrate_book.py` deletes none unless `--drop-orphans` says to, and refuses otherwise.
 
 Depth 10 costs roughly: median ~3s/move, p90 ~12s, worst seen ~31s — crazyhouse midgames with full
 hands are far more expensive than the opening. Measured on the ply-6 build: ~3.5s/search at plies
@@ -347,6 +349,7 @@ gitignored); there is a separate in-memory transposition table per search, which
 
 ```sql
 book_move(hash, rank, move, score, depth, eval_version)   -- PK (hash, rank); rank 1 = best
+                                                          -- FK hash -> position(hash) ON DELETE CASCADE
 position(hash, fen, ply)                                  -- PK hash
 ```
 
@@ -361,14 +364,34 @@ position(hash, fen, ply)                                  -- PK hash
 - `eval_version` is `EVAL_VERSION` in `eval.rs` and is **bumped by hand whenever an eval constant
   changes**. Nothing detects a stale value; bumping invalidates the book in place rather than
   dropping it.
-- `SCHEMA_VERSION` lives in `PRAGMA user_version`. A mismatch makes `setup_db` **refuse** — it
-  returns an error naming the on-disk version, the expected one, and how to rebuild, and touches
-  nothing. It never drops, because "recreate the schema" runs on paths nobody thinks of as
-  destructive (a worker's first save, a stray call from a test), and a version bump would turn any
-  of them into a silent wipe of the book. Discarding the book is
-  `./venv/bin/python rebuild_book.py`, which shows what is there and asks before dropping both
-  tables and stamping the new version (`--yes` skips the prompt). This replaced the old
-  "no depth column → DROP TABLE" column-sniffing, which was both a guess *and* destructive.
+- **The `hash` foreign key is what stops an unreadable row.** A `book_move` under a hash with no
+  `position` beside it can never be turned back into a position — a Zobrist hash is one-way — which
+  is exactly what made `move_cache` unmigratable. `save_entries` therefore writes the `position`
+  row **first**; reverse that ordering and every move insert fails on a missing parent. Enforcement
+  is per-connection and OFF by default in SQLite, so `open_db` sets `PRAGMA foreign_keys` — without
+  that line the `REFERENCES` clause is inert decoration. The analysis pair carries the same key.
+  Note what it does *not* cover: a `position` with no `book_move` is legal and does happen (SQL
+  cannot require a parent to have children). That direction is guarded in `save_entries`, which
+  refuses to run its `DELETE` when the entry holds no moves — that statement is a *replacement*,
+  and with nothing to insert afterwards it is a plain deletion. It is how the ply-0 root row went
+  missing from a 10,000-entry book while the save still reported success.
+- `SCHEMA_VERSION` lives in `PRAGMA user_version` and is **2**. A mismatch makes `setup_db`
+  **refuse** — it returns an error naming the on-disk version, the expected one, and both ways out,
+  and touches nothing. It never drops, because "recreate the schema" runs on paths nobody thinks of
+  as destructive (a worker's first save, a stray call from a test), and a version bump would turn
+  any of them into a silent wipe of the book. There are two front doors, and reaching for the wrong
+  one costs CPU-days:
+  - `./venv/bin/python migrate_book.py` **keeps every row**. SQLite has no
+    `ALTER TABLE ... ADD CONSTRAINT`, so it runs the documented 12-step rebuild in one transaction,
+    with `foreign_keys` OFF during the swap (on, a mid-rebuild parent drop cascades into children
+    still being copied), `legacy_alter_table` ON so the RENAME stays literal, and
+    `PRAGMA foreign_key_check` **inside** the transaction — a violation rolls back rather than
+    leaving a file that claims v2 and is not. It snapshots to `backups/` first. Orphaned move rows
+    make it refuse; `--drop-orphans` discards them after printing each. Nothing is re-searched: the
+    constraint changes what the schema permits, not what a row means.
+  - `./venv/bin/python rebuild_book.py` **discards** them, shows what is there and asks before
+    dropping both tables and stamping the new version (`--yes` skips the prompt). This replaced the
+    old "no depth column → DROP TABLE" column-sniffing, which was both a guess *and* destructive.
 - The book is process-global and filled as you search, so **searching the same position twice in one
   process is a hit that reports ~0s** — the reason `bench/` forks a fresh process per measurement and
   calls `find_best_move_with_score` (a plain single-PV search) rather than asking for two moves.
