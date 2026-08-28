@@ -6,31 +6,17 @@ This document lists recommended improvements that could be implemented to increa
 
 ## 🚀 Urgent improvements (quick to implement + large effect)
 
-### 1. Opening Book
-**Problem:** the AI spends 10-60 seconds calculating the first 5-8 moves, even though opening positions are well studied.
+### 1. Opening Book — ✅ **DONE**
+**Problem:** the AI spent 10-60 seconds on the first 5-8 moves of positions that are well studied.
 
-**Solution:**
-- Build a database of 50-100 of the best opening positions
-- Store the first 5-8 moves for popular openings
-- Format: SQLite table `openings(position_hash, move, frequency)`
+**What shipped** is not what this section originally proposed. It is not "50-100 popular openings"
+keyed by frequency — there is no corpus of minihouse games to take frequencies from. It is a
+**repertoire computed by deep search**: `build_book.py` walks only the positions where the engine is
+to move, one search and one child at our nodes, every legal reply at the opponent's. Two SQLite
+tables (`book_move`, `position`), not one, because a Zobrist hash cannot be turned back into a
+position without a FEN stored beside it. See **Filling the opening book** in `CLAUDE.md`.
 
-**Implementation:**
-```python
-def load_opening_book():
-    """Loads the opening book from opening_book.db"""
-    conn = sqlite3.connect('opening_book.db')
-    # ... loading
-    
-def get_opening_move(position_hash):
-    """Returns an opening move if the position is in the book"""
-    return opening_book.get(position_hash)
-```
-
-**Effect:**
-- ⚡ Instant first 5-8 moves (0.01s instead of 10-60s)
-- 📈 Better quality of play in the opening
-
-**Time estimate:** 2-4 hours
+**Effect, measured:** first moves answer in ~0.00s off a `[BOOK HIT]` instead of 3-30s.
 
 ---
 
@@ -68,37 +54,14 @@ for d in range(1, depth + 1):
 
 ---
 
-### 3. Null-Move Pruning
-**Problem:** the AI explores every move even when the position is clearly winning.
+### 3. Null-Move Pruning — ✅ **DONE**
+Implemented in `engine_rs/src/search.rs` (`allow_null`, `null_move_r = 2`), gated on not being in
+check and on the opponent holding an empty hand — a side with pieces to drop is never in zugzwang,
+and dropping is exactly the counterplay a null move assumes away.
 
-**Solution:**
-- Skip a move (null move)
-- If the position is still winning afterwards, the branch can be cut
-- Reduce search depth by 2-3 for the null-move search
-
-**Implementation:**
-```python
-def minimax_alpha_beta(gamestate, depth, alpha, beta, maximizing_player):
-    # ... existing code ...
-    
-    # Null-move pruning (for non-terminal and non-PV nodes)
-    if depth >= 3 and not gamestate.is_in_check(gamestate.current_turn):
-        # Simulate skipping a move
-        gamestate.current_turn = get_opposite_color(gamestate.current_turn)
-        null_score = -minimax_alpha_beta(gamestate, depth - 3, -beta, -beta + 1, not maximizing_player)
-        gamestate.current_turn = get_opposite_color(gamestate.current_turn)
-        
-        if null_score >= beta:
-            return beta  # Cutoff
-    
-    # ... rest of minimax ...
-```
-
-**Effect:**
-- ⚡ +30-50% search speed
-- 🎯 Especially effective in the endgame
-
-**Time estimate:** 2-3 hours
+One caveat, documented on `search_worker` and in `CLAUDE.md`: it returns a hard `beta`, which the TT
+store site then classifies against the original window. That is the source of the score drift
+between single-PV and MultiPV roots. Fixing it is a search change needing its own bench pass.
 
 ---
 
@@ -133,33 +96,17 @@ p.sort_stats('cumulative').print_stats(20)
 
 ## 🎯 Medium improvements (several days of work)
 
-### 5. Late Move Reduction (LMR)
-**Problem:** all moves are searched to full depth, even clearly bad ones.
-
-**Solution:**
-- After searching the first few best moves to full depth
-- Search the remaining moves at reduced depth (depth - 2)
-- If a good move is found, re-search it at full depth
-
-**Effect:**
-- ⚡ +20-30% speed
-- 🎯 Depth can be increased by 1-2
-
-**Time estimate:** 4-6 hours
+### 5. Late Move Reduction (LMR) — ✅ **DONE**
+In `engine_rs/src/search.rs`: `lmr_full_depth = 4`, `lmr_reduction_limit = 3`, skipped for noisy
+moves and for moves that give check, with a full-depth re-search when a reduced search beats alpha.
 
 ---
 
-### 6. Principal Variation Search (PVS)
-**Solution:**
-- The first move is searched with the full window [alpha, beta]
-- The rest with a null window [alpha, alpha+1] (scout search)
-- On a refutation, re-search with the full window
-
-**Effect:**
-- ⚡ +15-25% speed
-- 🎯 More accurate evaluation of the best moves
-
-**Time estimate:** 6-8 hours
+### 6. Principal Variation Search (PVS) — ✅ **DONE**
+Also in `minimax_ab` — see the header comment on it: "alpha-beta, PVS, LMR, null-move, check
+extensions, TT". Note the interaction with the book: ranks below 1 cannot be read off a PVS root,
+because every move after the first returns a *bound* rather than a value. That is why
+`multipv_root` exists and why it costs 2.4-4.4x.
 
 ---
 
@@ -296,21 +243,17 @@ position_hash -> {result: 'WIN/LOSS/DRAW', moves_to_mate: 12}
 ## 📊 Implementation priorities
 
 ### Phase 1: quick wins (1-2 weeks)
-1. ✅ DEBUG code cleanup (done)
-2. Opening Book
-3. Aspiration Windows
-4. Null-Move Pruning
-
-**Result:** +40-60% speed, depth 18-20, ~2200-2400 ELO
+1. ✅ DEBUG code cleanup
+2. ✅ Opening Book — shipped as a repertoire, see above
+3. Aspiration Windows — **the only one of these still open**
+4. ✅ Null-Move Pruning
 
 ---
 
 ### Phase 2: algorithmic improvements (2-4 weeks)
-5. Late Move Reduction
-6. Principal Variation Search
-7. Improved evaluation function
-
-**Result:** another +30% speed, ~2400-2600 ELO
+5. ✅ Late Move Reduction
+6. ✅ Principal Variation Search
+7. Improved evaluation function — open
 
 ---
 

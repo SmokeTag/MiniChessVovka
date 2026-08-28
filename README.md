@@ -10,7 +10,7 @@
 
 **A Rust-powered 6×6 Crazyhouse chess engine that reached #1 in the world 🏆**
 
-*Alpha-beta search · PyO3 bindings · Self-play training · Chess.com bot*
+*Alpha-beta search · PyO3 bindings · Opening repertoire · Chess.com bot*
 
 [![Rust](https://img.shields.io/badge/Engine-Rust-b7410e?logo=rust&logoColor=white)](engine_rs/)
 [![PyO3](https://img.shields.io/badge/Bindings-PyO3-3776ab?logo=python&logoColor=white)](https://pyo3.rs)
@@ -38,7 +38,7 @@ The bot plays on Chess.com in the **minihouse** variant and has reached the **#1
 *Beating the former top player 💪*
 </div>
 
-The engine trains overnight via self-play, improving its opening book and evaluation every day 📈
+The opening book is a repertoire built by deep search, extended a tier at a time 📈
 
 ## 🦀 Engine Highlights
 
@@ -100,10 +100,12 @@ pip install -r requirements.txt
 ./play.sh
 ```
 
-### 🧠 Self-Play Training
+### 📚 Opening Book
 
 ```bash
-./train.sh          # Ctrl+C to stop gracefully
+./build_book_parallel.sh 20 6 10   # 20 workers, repertoire to ply 6, depth 10
+./build_status.sh                  # entries per ply
+./build_stop.sh                    # graceful stop; the build resumes on re-run
 ```
 
 ### 🤖 Chess.com Bot
@@ -135,8 +137,8 @@ python -m playwright install chromium
                               ▲
       ┌───────────────────────┼────────────────────┐
       │                       │                    │
-  main.py + gui.py      play_online.py       self_play.py
-  (Pygame GUI)          (Chess.com bot)      (Training)
+  main.py + gui.py      play_online.py       build_book.py
+  (Pygame GUI)          (Chess.com bot)      (Opening book)
 ```
 
 ## 📂 Project Layout
@@ -152,12 +154,13 @@ engine_rs/              ← Rust engine (core)
     zobrist.rs          — position hashing
     lib.rs              — PyO3 module entry point
 
-*.py                    ← Python layer (GUI, bot, training)
+*.py                    ← Python layer (GUI, bot, book builder)
   ai.py                 — AI wrapper delegating to Rust
   gamestate.py          — game rules & state management
   gui.py                — Pygame board rendering
   main.py               — game loop entry point
   play_online.py        — chess.com browser bot
+  build_book.py         — opening repertoire builder
   config.py / pieces.py / utils.py
 
 docs/                   ← Documentation
@@ -168,9 +171,9 @@ tests/                  ← Test suite
 
 | Doc | Content |
 |-----|---------|
-| [Architecture](docs/ARCHITECTURE.md) | System design & component interactions |
 | [Evaluation Strategy](docs/evaluation_strategy.md) | Detailed scoring heuristics |
 | [Improvement Roadmap](docs/IMPROVEMENTS.md) | Planned enhancements |
+| [Parallel Search](docs/PARALLEL_SEARCH.md) | Record of the root-parallel search evaluation |
 
 ## 📝 License
 
@@ -194,7 +197,7 @@ tests/                  ← Test suite
 
 **Шахматный движок для 6×6 Crazyhouse на Rust, занявший 1-е место в мире 🏆**
 
-*Alpha-beta поиск · PyO3 привязки · Обучение через самоигру · Бот для Chess.com*
+*Alpha-beta поиск · PyO3 привязки · Дебютный репертуар · Бот для Chess.com*
 
 [![Rust](https://img.shields.io/badge/Engine-Rust-b7410e?logo=rust&logoColor=white)](engine_rs/)
 [![PyO3](https://img.shields.io/badge/Bindings-PyO3-3776ab?logo=python&logoColor=white)](https://pyo3.rs)
@@ -222,7 +225,7 @@ tests/                  ← Test suite
 *Победа над бывшим лидером 💪*
 </div>
 
-Движок тренируется ночами через самоигру, ежедневно улучшая дебютную книгу и оценочную функцию 📈
+Дебютная книга — это репертуар, построенный глубоким поиском и расширяемый по одному ярусу за раз 📈
 
 ## 🦀 Ключевые особенности движка
 
@@ -284,10 +287,12 @@ pip install -r requirements.txt
 ./play.sh
 ```
 
-### 🧠 Обучение через самоигру
+### 📚 Дебютная книга
 
 ```bash
-./train.sh          # Ctrl+C для корректной остановки
+./build_book_parallel.sh 20 6 10   # 20 воркеров, репертуар до 6 полуходов, глубина 10
+./build_status.sh                  # число позиций по полуходам
+./build_stop.sh                    # корректная остановка; сборка продолжится при перезапуске
 ```
 
 ### 🤖 Бот для Chess.com
@@ -319,8 +324,8 @@ python -m playwright install chromium
                               ▲
       ┌───────────────────────┼────────────────────┐
       │                       │                    │
-  main.py + gui.py      play_online.py       self_play.py
-  (Pygame GUI)          (Бот Chess.com)      (Обучение)
+  main.py + gui.py      play_online.py       build_book.py
+  (Pygame GUI)          (Бот Chess.com)      (Дебютная книга)
 ```
 
 ## 📂 Структура проекта
@@ -336,7 +341,7 @@ engine_rs/              ← Движок на Rust (ядро)
     zobrist.rs          — хеширование позиций
     lib.rs              — точка входа модуля PyO3
 
-*.py                    ← Python-слой (GUI, бот, обучение)
+*.py                    ← Python-слой (GUI, бот, сборка книги)
   ai.py                 — обёртка ИИ, делегирующая в Rust
   gamestate.py          — правила игры и управление состоянием
   gui.py                — отрисовка доски на Pygame
@@ -352,9 +357,9 @@ tests/                  ← Тесты
 
 | Документ | Содержание |
 |----------|------------|
-| [Архитектура](docs/ARCHITECTURE.md) | Проектирование системы и взаимодействие компонентов |
 | [Стратегия оценки](docs/evaluation_strategy.md) | Подробные эвристики оценки |
 | [План улучшений](docs/IMPROVEMENTS.md) | Запланированные доработки |
+| [Параллельный поиск](docs/PARALLEL_SEARCH.md) | Отчёт об оценке параллельного поиска |
 
 ## 📝 Лицензия
 

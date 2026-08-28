@@ -76,7 +76,7 @@ def build_gamestate(position):
             )
         if gs.needs_promotion_choice:
             # Stored positions record the promotion piece alongside the ply so
-            # the replay is deterministic; default matches self_play.py.
+            # the replay is deterministic.
             promo = position.get("promotions", {}).get(str(idx))
             if promo is None:
                 promo = "R" if gs.current_turn == "w" else "r"

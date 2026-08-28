@@ -98,7 +98,7 @@ def _normalize_promotion(move, color):
     are case-sensitive: 'R' for White, 'r' for Black. Feeding Rust's 'R' into a
     Black promotion makes make_move print "Invalid promotion choice" and return
     False, leaving the board untouched -- the GUI then falls back to a random
-    move (main.py) and self-play aborts the game (src/self_play.py:215).
+    move (main.py) rather than the engine's answer.
 
     Every engine move re-enters Python through this module, so this is the single
     place to reconcile the two conventions. Idempotent, and a no-op for drops.

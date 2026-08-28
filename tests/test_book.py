@@ -234,7 +234,7 @@ class TestMultiPV(IsolatedCacheDB):
                          "rank 1 is Black's best, which is White's worst")
 
     def test_exploration_gets_a_real_second_move(self):
-        """`self_play.choose_move_with_exploration` asks for two and used to get one."""
+        """A caller asking for two ranks used to get one, silently."""
         fresh_book()
         gs = initial_state()
 
