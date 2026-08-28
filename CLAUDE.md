@@ -75,10 +75,20 @@ Note the asymmetry at an even `--max-ply`: White gets answers for four of its ow
 0/2/4/6) and Black for three (1/3/5), so the engine leaves book one move earlier as Black. Evening
 that up means `--max-ply 7`, which adds Black's ply-7 tier — on the order of 70k searches.
 
-About 18% of the rows land at a depth below the one asked for (`depth 1..9` in `build_status.sh`).
-Every one of them is a **mate score**: the mate break exits iterative deepening early, so `depth` is
-the depth that completed. A depth-10 probe rejects them and re-searches, which costs nothing — a
-mate found at depth 3 is found again in milliseconds.
+About a quarter of the rows land at a depth below the one asked for (`depth 1..9` in
+`build_status.sh`; 2,721 of 10,001 on the ply-8 build). Every one of them is a **mate score**: the
+mate break exits iterative deepening early, so `depth` is the depth that completed. `probe_book`
+**accepts these at any requested depth** — `CHECKMATE_SCORE` is flat, carrying no mate distance, so
+a deeper search has nothing to add, and a fresh depth-10 search was verified to return the identical
+move and score for 48 rows spanning stored depths 1-9.
+
+Rejecting them on depth, as the probe used to, was the single most expensive mistake in the build.
+The re-search breaks at the same iteration and stores the same shallow depth right back, so those
+rows never converged: they were re-derived on **every** walk, forever. It is not milliseconds either
+— a depth-9 mate costs essentially a full depth-10 search (measured 2.3-20.9s each, and there were
+579 of them). The tax landed where it hurt most, above `--split-ply`, which every worker re-walks:
+one stage-8 shard spent **368s without leaving ply 5** and filed zero new entries. With the mate rows
+accepted the same shard walks all 2,027 nodes through ply 8 in **0s**.
 
 A whole self-play game, by contrast, writes ~200 entries of which maybe 8 are inside repertoire
 range and the rest are midgame positions no game will reach twice. `--random-plies` is worse than
@@ -358,7 +368,9 @@ position(hash, fen, ply)                                  -- PK hash
 - `book_move` is the hot path: everything a probe needs is in the row, so the runtime lookup
   **never joins `position`**. A probe rejects a row shallower than the depth asked for, one written
   under a different `eval_version`, and any move that is not legal in the position (a collision or a
-  stale row). Deeper-than-requested rows are accepted — same question, more evidence.
+  stale row). Deeper-than-requested rows are accepted — same question, more evidence. **A mate row is
+  accepted at any depth**, shallower included: the mate break means its `depth` records the iteration
+  that found the mate rather than a limit on how much was proved (`search::is_mate_score`).
 - `position` is what makes a hash mean something: the hash is one-way, so without a FEN a row can
   never be re-opened or expanded from. Written `INSERT OR IGNORE`; a **differing FEN on an existing
   hash is a Zobrist collision** and is logged as loudly as a log line can be. `ply` is

@@ -829,12 +829,32 @@ fn book_store(
     dirty.push(pos_hash_str.to_string());
 }
 
+/// A mate score is conclusive at whatever depth found it.
+///
+/// The mate break in the iterative-deepening loop exits as soon as an iteration returns a
+/// mate, so `depth` on such a row is the iteration that found it rather than the depth the
+/// caller asked for -- about 27% of a ply-8 book. Rejecting those on depth alone made every
+/// probe re-search them, and since the re-search breaks at the same iteration it stored the
+/// same shallow depth right back, so they never converged: the same mates were re-derived on
+/// every walk, forever. Measured on the ply-8 book that is ~54 CPU-minutes per full re-walk,
+/// 43 of which sit above `--split-ply`, where all 20 build workers each pay it in parallel.
+///
+/// Accepting them is sound because the score carries no mate distance -- `CHECKMATE_SCORE` is
+/// flat, so a deeper search has nothing to add. Verified over 48 rows spanning stored depths
+/// 1-9: a fresh depth-10 search returns the identical move and score for every one. The
+/// threshold matches the mate break's own, and is slack for the same reason -- scores near the
+/// bound do not land exactly on `CHECKMATE_SCORE` (a -999999 is in the book).
+fn is_mate_score(score: i32) -> bool {
+    score.abs() >= CHECKMATE_SCORE * 9 / 10
+}
+
 /// The book entry for this position, if it answers the question being asked.
 ///
 /// Rejects, in order: a shallower search than requested (a weaker answer than the one we
-/// are about to run), a score written by a different evaluation (`eval_version`), fewer
-/// ranks than the caller wants, and any move that is not legal here -- the last being a
-/// hash collision or a stale row, which is skipped rather than trusted.
+/// are about to run) *unless* it is a mate, which `is_mate_score` above explains, a score
+/// written by a different evaluation (`eval_version`), fewer ranks than the caller wants,
+/// and any move that is not legal here -- the last being a hash collision or a stale row,
+/// which is skipped rather than trusted.
 ///
 /// Deeper-than-requested entries are kept: they answer the same question with strictly
 /// more evidence. This reads only `book_move`; the `position` table is never joined on
@@ -851,10 +871,10 @@ fn probe_book(
         return None;
     }
     let head = &entry.moves[..want_ranks];
-    if head
-        .iter()
-        .any(|bm| bm.depth < min_depth || bm.eval_version != crate::eval::EVAL_VERSION)
-    {
+    if head.iter().any(|bm| {
+        (bm.depth < min_depth && !is_mate_score(bm.score))
+            || bm.eval_version != crate::eval::EVAL_VERSION
+    }) {
         return None;
     }
 
@@ -1155,7 +1175,7 @@ pub fn find_best_move(
         let iter_score = completed.as_ref().and_then(|(r, _)| r.first().map(|&(_, s)| s)).unwrap_or(0);
         eprintln!("  [ID] depth {} done in {:.2}s, score={}", current_depth, elapsed, iter_score);
 
-        if iter_score.abs() >= CHECKMATE_SCORE * 9 / 10 {
+        if is_mate_score(iter_score) {
             eprintln!("  Mate found at depth {}", current_depth);
             break;
         }
