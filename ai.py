@@ -14,7 +14,7 @@ from utils import get_piece_color, algebraic_to_coords
 CHECKMATE_SCORE = 1000000
 STALEMATE_SCORE = 0
 
-# --- Module-level state (compatibility with play_online.py, precalc_openings.py) ---
+# --- Module-level state (compatibility with play_online.py) ---
 move_cache = {}  # Python-side mirror; Rust manages its own book internally
 tt = {}  # Not used directly; Rust has internal TT
 DB_PATH = "book.db"

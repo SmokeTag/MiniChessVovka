@@ -6,9 +6,6 @@ venv/
 *.egg-info/
 
 # Database (runtime)
-move_cache.db
-move_cache.db.*
-move_cache.db-*
 book.db
 book.db.*
 book.db-*
