@@ -33,7 +33,6 @@ Always invoke Python through the project venv (`./venv/bin/python`, or activate 
 ./train_status.sh ; ./train_stop.sh
 ./bot_start.sh casual|rated        # chess.com bot (needs .env + playwright chromium)
 ./bot_stop.sh ; ./monitor_bot.sh
-./venv/bin/python precalc_openings.py   # fill the opening book by deep search
 ./venv/bin/python rebuild_book.py       # the only thing that deletes book rows; asks first
 ```
 
@@ -204,9 +203,9 @@ position(hash, fen, ply)                                  -- PK hash
   process is a hit that reports ~0s** — the reason `bench/` forks a fresh process per measurement and
   calls `find_best_move_with_score` (a plain single-PV search) rather than asking for two moves.
 
-`move_cache.db` is the **dead** predecessor: nothing reads or writes it any more. Its hashes cannot
-be turned back into FENs, and ~97% of its rows were unreachable anyway, so none of it was migratable.
-Delete it when you want the disk space back.
+`move_cache.db` was the predecessor and is **gone**. Nothing was migrated out of it: its hashes
+could not be turned back into FENs, and ~97% of its rows were unreachable by the depth-10 probe
+training actually runs.
 
 **FEN.** `engine_rs/src/fen.rs` carries exactly what the Zobrist hash reads — board, side to move,
 both hands, promoted squares — and nothing path-dependent. That equivalence is the point:
@@ -273,8 +272,14 @@ a full measure → propose → implement-in-worktrees → verify pass over this 
   `nn/model.py` sized the action space as `board_size**4`, which cannot express a drop or a promotion
   choice, and `nn/mcts.py` never negated the value between alternating players. Anything neural starts
   from the Rust `GameState`, not from those files (`git show 709f963:nn/model.py` if you want them back).
-- `move_cache.db` in the repo root is dead weight from before the book (see **The opening book**);
-  nothing reads it. `precalc_openings.py` still fills rank 1 only — it never asks for alternatives.
+- `move_cache.db` and `precalc_openings.py` are **deleted**. The DB was the pre-book
+  `(hash, depth)` table; nothing had read it since the book landed, and it was unmigratable —
+  a Zobrist hash cannot be turned back into a position without the FEN the `position` table now
+  stores beside it. The script hardcoded a three-level opening walk, threw the score away
+  (`return best, 0, elapsed`), and never called `set_ply`, so every row it wrote would have
+  claimed the position first occurs at ply 0. **Nothing fills the book on purpose right now** —
+  that is the book builder's job, and it does not exist yet
+  (`git show 75c03d4:precalc_openings.py` for the old script).
 - `config.py`'s eval constants (`CENTER_BONUS`, `KING_SAFETY_BONUS`, `PIECE_VALUES` in `pieces.py`, …)
   are dead weight from the pre-Rust era — the numbers that actually decide moves are the `const`s at
   the top of `engine_rs/src/eval.rs`. Editing the Python ones changes nothing — and editing the Rust

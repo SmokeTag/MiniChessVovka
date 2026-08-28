@@ -15,9 +15,9 @@
 //!   without a FEN beside it a book entry can never be re-opened, re-searched, or
 //!   expanded from. See `fen.rs`.
 //!
-//! The DB lives in `book.db`, next to (not on top of) the old `move_cache.db`, which
-//! this module no longer reads or writes -- its hashes cannot be turned back into FENs,
-//! so nothing in it was migratable. Delete it when you no longer want the disk space.
+//! The DB lives in `book.db`. It did not replace the old `move_cache.db` in place: that
+//! file's hashes could not be turned back into FENs, so nothing in it was migratable, and
+//! it has since been deleted.
 //!
 //! `DB_PATH` is a relative string, so the file is resolved against the process CWD:
 //! workers must run from the repo root, and tests must not (see
@@ -268,8 +268,8 @@ pub fn save_book_entries(book: &Book, hashes: &[String]) -> Result<(), BookError
 
     let conn = open_db()?;
 
-    // A process that searched without ever loading the book -- a bench child, a test,
-    // `precalc_openings.py` on a fresh checkout -- would otherwise reach the INSERTs with
+    // A process that searched without ever loading the book -- a bench child, a test, a
+    // worker on a fresh checkout -- would otherwise reach the INSERTs with
     // no tables to insert into and lose the whole run's work to an error log. A foreign
     // schema stops the save here instead, with the rows still in memory and the caller
     // told why, rather than writing this build's rows into someone else's tables.
