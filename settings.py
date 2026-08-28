@@ -15,9 +15,11 @@ DEFAULTS = {
     "win_w": None,          # None = auto-fit to the desktop on first run
     "win_h": None,
     "ai_depth": 6,
-    "white_ai": False,
-    "black_ai": True,       # human plays White by default
+    "white_ai": False,      # both sides start human-driven; the AI buttons opt in
+    "black_ai": False,
     "show_hint": False,
+    "hint_lines": 1,
+    "show_eval": True,
     "board_flipped": None,  # None = orient to whichever side the human plays
     "sound": False,
 }
@@ -30,6 +32,18 @@ DEPTH_CHOICES = [2, 3, 4, 5, 6, 7, 8, 9, 10]
 DEPTH_LABELS = {
     2: "very fast", 3: "very fast", 4: "fast", 5: "fast",
     6: "balanced", 7: "strong", 8: "strong", 9: "slow", 10: "very slow",
+}
+
+# How many ranked lines the hint asks for. Every value above 1 turns the hint into a
+# MultiPV search, which is the only way ranks 2+ carry real scores rather than
+# alpha-beta bounds -- and it is not free: measured at depth 9, 2 lines costs 2.4-3.0x
+# a single-PV search and 3 lines 3.8-4.4x (see CLAUDE.md). The ladder stops at 4 because
+# the hint now runs at the full selected depth, so the multiplier is paid in full, and a
+# 6x6 root rarely has more than a handful of moves worth ranking anyway.
+HINT_LINE_CHOICES = [1, 2, 3, 4]
+
+HINT_LINE_LABELS = {
+    1: "best move only", 2: "2.4-3x slower", 3: "~4x slower", 4: "~5x slower",
 }
 
 
@@ -49,6 +63,8 @@ def load():
     # Validate the fields that would break the UI if wrong.
     if values["ai_depth"] not in DEPTH_CHOICES:
         values["ai_depth"] = DEFAULTS["ai_depth"]
+    if values["hint_lines"] not in HINT_LINE_CHOICES:
+        values["hint_lines"] = DEFAULTS["hint_lines"]
     for key in ("win_w", "win_h"):
         if values[key] is not None and not isinstance(values[key], int):
             values[key] = None
@@ -65,11 +81,19 @@ def save(values):
         print(f"[settings] could not save preferences: {exc}")
 
 
-def cycle_depth(current, step):
-    """Move `step` places along DEPTH_CHOICES, clamped at both ends."""
+def _cycle(choices, current, step, fallback):
+    """Move `step` places along `choices`, clamped at both ends."""
     try:
-        index = DEPTH_CHOICES.index(current)
+        index = choices.index(current)
     except ValueError:
-        index = DEPTH_CHOICES.index(DEFAULTS["ai_depth"])
-    index = max(0, min(len(DEPTH_CHOICES) - 1, index + step))
-    return DEPTH_CHOICES[index]
+        index = choices.index(fallback)
+    index = max(0, min(len(choices) - 1, index + step))
+    return choices[index]
+
+
+def cycle_depth(current, step):
+    return _cycle(DEPTH_CHOICES, current, step, DEFAULTS["ai_depth"])
+
+
+def cycle_hint_lines(current, step):
+    return _cycle(HINT_LINE_CHOICES, current, step, DEFAULTS["hint_lines"])
