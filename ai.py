@@ -46,8 +46,80 @@ def load_move_cache_from_db():
 
 
 def save_move_cache_to_db(cache_to_save=None):
-    """Write the positions searched since the last save back to book.db."""
+    """Flush **every** position searched since the last save back to book.db.
+
+    Bulk and undiscriminating by design — the book builder wants exactly that, because
+    everything it searches is a repertoire node it chose to search. Interactive front
+    ends want the opposite: a GUI session searches whatever the user happens to look at,
+    and this call cannot tell an opening line from idle exploration. `main.py` therefore
+    does not call it at all; see `save_position_to_book`.
+    """
     _rs.save_move_cache_to_db()
+
+
+def save_position_to_book(gamestate):
+    """File just this position's search result into book.db. Returns True if it wrote.
+
+    The deliberate counterpart to `save_move_cache_to_db`: the caller names the one
+    position it wants kept, and everything else the session searched stays in memory.
+    False means nothing has searched this position in this process, so there was
+    nothing to write — not an error.
+    """
+    return _rs.save_book_position(_sync_to_rust(gamestate))
+
+
+def book_has_position(gamestate):
+    """Whether this process holds a searched entry for the position — i.e. whether
+    `save_position_to_book` would write anything."""
+    return _rs.book_has_position(_sync_to_rust(gamestate))
+
+
+def pending_book_writes():
+    """How many searched positions are queued in memory and not on disk."""
+    return _rs.pending_book_writes()
+
+
+def discard_pending_book_writes():
+    """Drop the unsaved queue. The entries stay in memory as analysis cache."""
+    return _rs.discard_pending_book_writes()
+
+
+def book_has_row(gamestate):
+    """Whether this position already has a row in `book_move` **on disk**.
+
+    Distinct from `book_has_position`, which asks whether anything is in memory for it.
+    Once the analysis cache is loaded the two share one map, so only the table a row came
+    from says which store it belongs to.
+    """
+    return _rs.book_has_row(_sync_to_rust(gamestate))
+
+
+# --- Analysis cache -------------------------------------------------------
+# `analysis_move` / `analysis_position` in the same book.db: the same two tables again,
+# holding what a session searched rather than what someone curated. Loading it is opt-in,
+# so `build_book.py` and `play_online.py` keep seeing the book alone.
+
+def load_analysis_from_db():
+    """Merge the analysis cache into the in-memory book. Returns how many it added.
+
+    The book wins every collision. Loading this means the engine will also *play* from
+    cached analysis — the probe reads one map and cannot tell the stores apart — which is
+    why only the GUI calls it.
+    """
+    return _rs.load_analysis_from_db()
+
+
+def save_analysis_to_db():
+    """Flush everything searched since the last flush into the analysis tables.
+
+    The bulk write the book no longer gets. Nothing here can reach `book_move`.
+    """
+    return _rs.save_analysis_to_db()
+
+
+def rebuild_analysis():
+    """Drop the analysis cache and recreate it empty. The book is untouched."""
+    _rs.rebuild_analysis()
 
 
 def book_size():
@@ -201,6 +273,34 @@ def find_best_move(gamestate, depth=6, return_top_n=1, time_limit=None, parallel
     print(f"AI ({gamestate.current_turn}) finished in {elapsed:.2f}s.")
 
     return _normalize_result(result, gamestate.current_turn)
+
+
+def find_best_move_with_score(gamestate, depth=6, time_limit=None, parallel=None):
+    """Single-PV search returning `(move, white_relative_score)`.
+
+    Same search as `find_best_move(..., return_top_n=1)` — no MultiPV premium — but it
+    hands back the score too, which is what the GUI's eval readout shows while the
+    engine is playing. The score is white-relative (see `search::find_best_move`), so
+    positive always favours White whoever is to move.
+
+    Returns `(None, None)` when there is nothing to search, and `(move, None)` for a
+    forced move: one legal reply is answered without a search, so there is no score
+    behind it — the same reason `search::find_best_move` refuses to file that row.
+    """
+    if gamestate.needs_promotion_choice:
+        return None, None
+
+    legal_moves = gamestate.get_all_legal_moves()
+    if not legal_moves:
+        return None, None
+    if len(legal_moves) == 1:
+        return legal_moves[0], None
+
+    rs = _sync_to_rust(gamestate)
+    move, score = _rs.find_best_move_with_score(rs, depth, time_limit, parallel)
+    if move is None:
+        return None, None
+    return _normalize_promotion(move, gamestate.current_turn), int(score)
 
 
 # --- Compatibility functions used by tests and other modules ---
