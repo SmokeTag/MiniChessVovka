@@ -138,7 +138,7 @@ class UIState:
 
     @property
     def hint_workers_label(self):
-        return settings.HINT_WORKER_LABELS.get(self.hint_workers, "")
+        return settings.hint_worker_label(self.hint_workers)
 
     @property
     def can_workers_up(self):
@@ -895,15 +895,20 @@ class Game:
             self.toast(f"Hints will search {workers} at once — turn hints on to use it.",
                        PANEL_COLORS['warn'])
             return
-        note = settings.HINT_WORKER_LABELS.get(workers, "")
+        note = settings.hint_worker_label(workers)
+        # Each concurrent search pre-allocates its own transposition table, so the cost
+        # of a high setting is memory rather than anything subtle. Name it: it is the
+        # one consequence the window cannot otherwise show.
+        cost = f"about {workers * settings.HINT_WORKER_MB / 1024:.1f} GB" if (
+            workers * settings.HINT_WORKER_MB >= 1024
+        ) else f"about {workers * settings.HINT_WORKER_MB} MB"
         running = self.hints.active()
         if lowering and running > workers:
             self.toast(f"Hint searches {note}.\n"
                        f"{running} already running will finish first.",
                        PANEL_COLORS['text_dim'])
             return
-        self.toast(f"Hint searches {note}." if note else
-                   f"Hint searches {workers} at once.", PANEL_COLORS['text_dim'])
+        self.toast(f"Hint searches {note} — {cost} when full.", PANEL_COLORS['text_dim'])
 
     def drop_hint(self):
         """Take the hint off screen, because the question changed.

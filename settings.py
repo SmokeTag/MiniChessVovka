@@ -54,14 +54,26 @@ HINT_LINE_LABELS = {
 # on and all three positions get searched, instead of the first search being finished,
 # thrown away, and only then the third started.
 #
-# The ladder is clamped to the machine in `load()` -- promising 8 concurrent searches on
-# a 4-core box would just oversubscribe and make every one of them slower.
-HINT_WORKER_CHOICES = [1, 2, 3, 4, 6, 8]
+# The ladder runs to 48 and is clamped to the machine in `hint_worker_choices()`; it is
+# meant never to be the binding constraint, because nothing about a high value is
+# unsafe. What it costs is memory: `SearchState::new()` pre-allocates a transposition
+# table of 1<<20 entries per search, so each concurrent worker is roughly **30 MB** of
+# RSS. Measured on a 24-core box, 24 distinct depth-8 searches:
+#
+#     workers   1     4     8    12    16    20    24
+#     wall   25.6s 10.7s  8.3s  7.5s  7.3s  7.0s  6.6s
+#     RSS      68   205   339   478   586   676   673   MB
+#
+# Throughput flattens well before the core count -- a batch is dominated by its one or
+# two expensive positions -- but nothing degrades either, so the choice is the user's.
+HINT_WORKER_CHOICES = [1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 32, 48]
 
-HINT_WORKER_LABELS = {
-    1: "one at a time", 2: "2 positions at once", 3: "3 positions at once",
-    4: "4 positions at once", 6: "6 positions at once", 8: "8 positions at once",
-}
+#: Rough RSS per concurrent search, MB. The pre-allocated TT dominates; see above.
+HINT_WORKER_MB = 30
+
+
+def hint_worker_label(workers):
+    return "one at a time" if workers == 1 else f"{workers} positions at once"
 
 
 def hint_worker_choices():

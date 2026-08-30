@@ -405,6 +405,21 @@ Things to keep in mind here:
 - **The ladder is capped to the machine** (`settings.hint_worker_choices`, `cpu_count - 1`).
   A hint search is single-threaded — root-parallel search is off by default — so N workers means
   N cores busy. Turning `set_parallel_search` on as well would oversubscribe.
+- **What a high setting costs is memory, not stability.** `SearchState::new()` pre-allocates a
+  transposition table of `1<<20` entries, *per search*, so every concurrent worker is roughly
+  30 MB of RSS — the one consequence the window cannot otherwise show, which is why
+  `set_hint_workers` names it in its toast. Measured on 24 physical cores, 24 distinct depth-8
+  searches through the pool:
+
+  ```
+  workers   1     4     8    12    16    20    24
+  wall   25.6s 10.7s  8.3s  7.5s  7.3s  7.0s  6.6s
+  RSS      68   205   339   478   586   676   673   MB
+  ```
+
+  Throughput flattens well before the core count — a batch is dominated by its one or two
+  expensive positions — but nothing degrades past it either. So `HINT_WORKER_CHOICES` runs to
+  48 and is meant never to be the binding constraint; the machine cap is.
 
 **More than one hint line means MultiPV.** `HintThread(lines=n)` with `n > 1` calls
 `find_best_move(..., return_top_n=n)`, which is 2.4–4.4x a single-PV search at the same depth —
