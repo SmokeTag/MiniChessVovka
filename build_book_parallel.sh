@@ -110,6 +110,26 @@ stop_workers() {
 }
 trap stop_workers INT TERM
 
+# The deepest ply that --opponent-breadth answers with "all", which is as deep as
+# --split-ply may go. Above --split-ply every shard walks the same nodes, and that is only
+# free while expanding them costs nothing: with "all" the builder just enumerates the
+# replies, but past that ply it has to *search* the opponent node to rank them. Split below
+# that line and all N workers compute the same scan tier -- measured on stage 12 at
+# --split-ply 10, 3,549 unique scans turned into ~67,000 searches and ate four of the
+# stage's first four hours. Asking build_book.py's own parser keeps the two readings of
+# the spec from drifting; importing it is safe because it chdirs in main(), not at import.
+SPLIT_CAP=$("$PY" - "$BREADTH" <<'PY'
+import sys
+from build_book import HARD_PLY_CAP, breadth_at, parse_breadth
+
+rules = parse_breadth(sys.argv[1])
+ply = 0
+while ply <= HARD_PLY_CAP and breadth_at(rules, ply) is None:
+    ply += 1
+print(ply - 1)
+PY
+) || { echo "Could not read --opponent-breadth $BREADTH" >&2; exit 1; }
+
 echo "=================================="
 echo "Repertoire build: $WORKERS workers, up to ply $MAX_PLY, depth $DEPTH"
 echo "  resign cutoff:  $RESIGN"
@@ -127,14 +147,25 @@ echo "--- stage 2 (serial seed, plies 0-2) ---"
     2> "$LOG_DIR/stage-2-seed.err" | grep --line-buffered -Ev '^\s*$'
 
 for (( ply = 4; ply <= MAX_PLY; ply += 2 )); do
+    # One tier per stage, so the split follows the tier -- but never past the point where
+    # the prefix stops being free (SPLIT_CAP), and never above the root, which would hand
+    # every subtree to shard 0.
+    SPLIT=$(( ply - 2 ))
+    CAPPED=""
+    if [ "$SPLIT" -gt "$SPLIT_CAP" ]; then
+        SPLIT="$SPLIT_CAP"
+        CAPPED="  [capped: breadth is a number past ply $SPLIT_CAP, so a deeper split "
+        CAPPED+="would make every shard re-scan it]"
+    fi
+    [ "$SPLIT" -lt 2 ] && SPLIT=2
     echo
-    echo "--- stage $ply ($WORKERS shards, --split-ply $((ply - 2))) ---"
+    echo "--- stage $ply ($WORKERS shards, --split-ply $SPLIT) ---$CAPPED"
     : > "$PID_FILE"
     for (( i = 0; i < WORKERS; i++ )); do
         # stderr is the engine's per-depth chatter: one line per iterative-deepening
         # iteration per search, which is most of the volume. Kept out of the main log.
         "$PY" -u build_book.py \
-            --max-ply "$ply" --split-ply "$((ply - 2))" --depth "$DEPTH" \
+            --max-ply "$ply" --split-ply "$SPLIT" --depth "$DEPTH" \
             --resign "$RESIGN" --opponent-breadth "$BREADTH" --scan-depth "$SCAN_DEPTH" \
             --shard "$i/$WORKERS" \
             > "$LOG_DIR/stage-$ply-worker-$i.log" 2>/dev/null &
