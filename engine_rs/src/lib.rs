@@ -657,13 +657,43 @@ fn load_move_cache_from_db() {
     DIRTY_KEYS.lock().unwrap().clear();
 }
 
-/// Merges the analysis cache into the in-memory book, and returns how many entries it
-/// added.
+/// Whether a cached analysis entry should replace the book entry sitting on its hash.
 ///
-/// **The book wins every collision.** A curated row and a row from someone poking at a
-/// position are not interchangeable, and a probe cannot tell them apart once they are in
-/// the same map — so the repertoire's answer is the one that survives, whatever depth
-/// the cached one reached.
+/// **The book decides what the engine plays, and this cannot change that.** The only
+/// entry allowed through is one that names the *same rank-1 move* under the *same*
+/// `eval_version` and carries strictly more evidence for it — deeper, or more ranks, and
+/// never less of either. So the move is identical before and after; all that changes is
+/// how many questions `probe_book` can answer from it.
+///
+/// That is not a nicety. The book builder files rank 1 only (MultiPV costs 2.4-4.4x, see
+/// CLAUDE.md), so a 1-rank book row shadowed the 4-rank row the GUI had just spent a
+/// depth-10 MultiPV search producing — and `probe_book` rejects an entry holding fewer
+/// ranks than the caller asked for. The result was a hint at 4 lines re-searching the
+/// initial position on **every** launch, with the answer it wanted sitting in
+/// `analysis_move` the whole time, correct, and discarded at load.
+///
+/// Entries are taken whole, never spliced. Ranks 2.. come from one MultiPV pass at the
+/// final depth and only mean anything together; grafting another search's ranks onto
+/// this one's rank 1 would file scores no search ever produced.
+fn analysis_supersedes(cached: &cache::BookEntry, book: &cache::BookEntry) -> bool {
+    let (Some(new1), Some(old1)) = (cached.moves.first(), book.moves.first()) else {
+        return false;
+    };
+    new1.move_repr == old1.move_repr
+        && new1.eval_version == old1.eval_version
+        && new1.depth >= old1.depth
+        && cached.moves.len() >= book.moves.len()
+        && (new1.depth > old1.depth || cached.moves.len() > book.moves.len())
+}
+
+/// Merges the analysis cache into the in-memory book, and returns how many entries it
+/// added or improved.
+///
+/// **The book wins every collision it is not strictly beaten on.** A curated row and a
+/// row from someone poking at a position are not interchangeable, and a probe cannot
+/// tell them apart once they are in the same map — so the repertoire's answer survives
+/// unless the cached one is the same answer with more behind it. See
+/// [`analysis_supersedes`] for exactly what that means and why the exception exists.
 ///
 /// Loading this is what makes the cache worth having: `probe_book` reads the one map, so
 /// a position analysed in an earlier session comes back as a hit instead of a re-search.
@@ -675,15 +705,31 @@ fn load_analysis_from_db() -> usize {
     let cached = cache::load_store(cache::Store::Analysis);
     let mut book = BOOK.lock().unwrap();
     let mut added = 0usize;
+    let mut deepened = 0usize;
     for (hash, entry) in cached {
-        if !book.contains_key(&hash) {
-            book.insert(hash, entry);
-            added += 1;
+        match book.get(&hash) {
+            None => {
+                book.insert(hash, entry);
+                added += 1;
+            }
+            Some(existing) if analysis_supersedes(&entry, existing) => {
+                book.insert(hash, entry);
+                deepened += 1;
+            }
+            Some(_) => {}
         }
+    }
+    if deepened > 0 {
+        eprintln!(
+            "[ANALYSIS] {} book entr{} replaced by a cached search of the same move with \
+             more ranks or more depth",
+            deepened,
+            if deepened == 1 { "y" } else { "ies" }
+        );
     }
     // Loaded, therefore already on disk: not pending.
     DIRTY_KEYS.lock().unwrap().clear();
-    added
+    added + deepened
 }
 
 /// Flushes every position searched since the last flush into the analysis tables.

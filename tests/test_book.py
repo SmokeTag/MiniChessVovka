@@ -299,3 +299,123 @@ class TestPositionTable(IsolatedCacheDB):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestAnalysisMergeKeepsTheBetterEntry(IsolatedCacheDB):
+    """What `load_analysis_from_db` does when both stores hold the same position.
+
+    The book builder files rank 1 only -- MultiPV costs 2.4-4.4x -- so a curated row is
+    routinely *narrower* than the row a GUI session produced for the same position. The
+    merge used to be `if !book.contains_key(hash)`, all or nothing, so the 1-rank book
+    row shadowed a 4-rank cached row and `probe_book` then rejected it for holding fewer
+    ranks than asked. A hint at 4 lines re-searched the initial position on every single
+    launch with the answer already on disk.
+
+    The exception is deliberately narrow: same rank-1 move, same eval_version, and
+    strictly more evidence -- deeper, or more ranks, and never less of either. What the
+    engine plays cannot change.
+
+    The analysis rows are written by hand rather than by a second search on purpose. A
+    single-PV root and a MultiPV root can name different moves at the same depth (the
+    drift documented on `multipv_root`), so a test that searched twice would be asserting
+    that they happened to agree rather than what the merge rule does.
+    """
+
+    def book_row(self, depth=6):
+        """File a 1-rank book entry for the initial position and return its row."""
+        rs.find_best_move(initial_state(), depth, 1, None, False)
+        ai.save_move_cache_to_db()
+        ai.load_move_cache_from_db()
+        return rows("SELECT hash, move, score, depth, eval_version "
+                    "FROM book_move WHERE rank = 1")[0]
+
+    def write_analysis(self, pos_hash, moves):
+        """`moves` is [(rank, move_repr, score, depth, eval_version)]."""
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute("INSERT OR REPLACE INTO analysis_position(hash, fen, ply) "
+                         "SELECT hash, fen, ply FROM position WHERE hash = ?", (pos_hash,))
+            for row in moves:
+                conn.execute(
+                    "INSERT OR REPLACE INTO analysis_move"
+                    "(hash, rank, move, score, depth, eval_version) VALUES (?,?,?,?,?,?)",
+                    (pos_hash,) + row)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def other_legal_moves(self, exclude, count):
+        legal = [str(m) for m in initial_state().get_all_legal_moves()]
+        return [m for m in legal if m != exclude][:count]
+
+    def reload(self):
+        ai.load_move_cache_from_db()
+        return ai.load_analysis_from_db()
+
+    def test_more_ranks_for_the_same_move_replaces_the_narrower_book_row(self):
+        fresh_book()
+        pos_hash, move, score, depth, ev = self.book_row()
+        extra = self.other_legal_moves(move, 2)
+        self.write_analysis(pos_hash, [
+            (1, move, score, depth, ev),
+            (2, extra[0], score - 10, depth, ev),
+            (3, extra[1], score - 20, depth, ev),
+        ])
+
+        self.assertEqual(self.reload(), 1, "the wider entry must be taken")
+
+        hit = rs.find_best_move(initial_state(), depth, 3, None, False)
+        self.assertEqual(len(hit), 3, "a 3-line probe is now answerable from cache")
+        self.assertEqual(str(hit[0][0]), move, "and rank 1 is still the book's move")
+
+    def test_the_narrower_book_row_alone_cannot_answer_a_wider_probe(self):
+        """The other half of the bug: without the merge there is nothing to hit."""
+        fresh_book()
+        pos_hash, move, score, depth, ev = self.book_row()
+
+        self.assertEqual(ai.pending_book_writes(), 0, "the load leaves nothing pending")
+
+        hit = rs.find_best_move(initial_state(), depth, 3, None, False)
+        self.assertEqual(len(hit), 3)
+        self.assertEqual(ai.pending_book_writes(), 1,
+                         "a 1-rank row cannot serve a 3-rank request, so it re-searched "
+                         "and filed a new entry -- a hit would have written nothing")
+
+    def test_a_cached_entry_naming_a_different_move_never_wins(self):
+        """The curation guarantee, forced: deeper *and* wider, but a different rank 1."""
+        fresh_book()
+        pos_hash, move, score, depth, ev = self.book_row()
+        others = self.other_legal_moves(move, 1)
+        self.write_analysis(pos_hash, [
+            (1, others[0], score + 50, depth + 4, ev),
+            (2, move, score, depth + 4, ev),
+        ])
+
+        self.assertEqual(self.reload(), 0, "a different move must not displace the book")
+        played = rs.find_best_move(initial_state(), depth, 1, None, False)
+        self.assertEqual(str(played), move)
+
+    def test_a_shallower_cached_entry_never_wins_even_with_more_ranks(self):
+        """Mirrors `book_store`: never trade a deeper answer for a shallower one."""
+        fresh_book()
+        pos_hash, move, score, depth, ev = self.book_row()
+        extra = self.other_legal_moves(move, 1)
+        self.write_analysis(pos_hash, [
+            (1, move, score, depth - 2, ev),
+            (2, extra[0], score - 10, depth - 2, ev),
+        ])
+
+        self.assertEqual(self.reload(), 0, "extra ranks do not buy a shallower entry in")
+        _, stored_depth = rs.find_best_move_with_score(initial_state(), depth, None, False)
+        self.assertEqual(len(rows("SELECT 1 FROM book_move WHERE hash = ?", pos_hash)), 1)
+
+    def test_a_row_from_another_eval_version_never_wins(self):
+        fresh_book()
+        pos_hash, move, score, depth, ev = self.book_row()
+        extra = self.other_legal_moves(move, 1)
+        self.write_analysis(pos_hash, [
+            (1, move, score, depth + 4, ev + 1),
+            (2, extra[0], score - 10, depth + 4, ev + 1),
+        ])
+
+        self.assertEqual(self.reload(), 0, "a stale evaluation is not more evidence")

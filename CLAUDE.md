@@ -320,6 +320,31 @@ in-memory book is still filled by every search and is still the analysis cache �
 searched twice in one process is a ~0s hit whether or not it was ever saved. Only the disk
 write is gated.
 
+**The analysis cache may widen a book entry, never redirect it.** `load_analysis_from_db`
+merges `analysis_move` into the same in-memory map the book lives in, and the book wins every
+collision it is not *strictly beaten* on. The one exception: a cached entry naming the **same
+rank-1 move** under the **same `eval_version`**, with more depth or more ranks and never less
+of either, replaces the book's — whole, never spliced, since ranks 2.. only mean anything as
+one MultiPV pass.
+
+The exception is not a nicety, it is a bug fix. The builder files **rank 1 only**, so a
+curated row is routinely narrower than what a GUI session produced for the same position, and
+`probe_book` rejects an entry holding fewer ranks than the caller asked for. The merge used to
+be `if !book.contains_key(hash)` — all or nothing — so a 1-rank book row shadowed the 4-rank
+row a depth-10 MultiPV search had just written, and a hint at 4 lines re-searched the **initial
+position on every launch** with the answer sitting in `analysis_move` the whole time. Measured
+on a 41,437-entry book with 75 cached entries: 8 collisions, 4 recovered by this rule.
+
+What it deliberately does not fix: a single-PV root and a MultiPV root can name different moves
+at the same depth (the drift documented on `multipv_root`), and a builder row comes from the
+former while a hint at 2+ lines comes from the latter. When they disagree the book's move
+stands and that position keeps re-searching — the alternative is letting exploration silently
+redirect a curated line, which is the thing the whole store split exists to prevent. Curate the
+position at the width you read it at (Ctrl+S from the GUI with the hint lines you want) and the
+book row itself is wide enough. `tests/test_book.py::TestAnalysisMergeKeepsTheBetterEntry`
+pins all of it, writing the analysis rows by hand — a test that searched twice would be
+asserting the two roots happened to agree rather than what the merge rule does.
+
 Worth knowing when curating: `probe_book` is read at the root of `find_best_move`, so a row
 is only ever *consulted* at a position where the engine is to move. Saving a position where
 you are to move files a perfectly good row that the runtime will never probe in that
