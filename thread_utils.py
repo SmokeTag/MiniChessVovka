@@ -3,10 +3,16 @@
 
 Both threads copy the position before they start: the GUI keeps mutating the live
 `GameState` while a search runs, and a search reading a board mid-move would answer a
-question about a position that never existed. The caller stamps a `generation` on the
-thread and drops the result if the position has moved on since (see `main.Game`).
+question about a position that never existed.
+
+Staleness is handled differently on the two paths. `AIThread` is a move the engine is
+about to play, so `main.Game` stamps a `generation` on it and drops the result if the
+position moved on. `HintPool` needs no such stamp: it keys every search by the position
+it answers, so a late answer is not stale, it is simply an answer to a different
+question — and one worth keeping.
 """
 
+import collections
 import copy
 import threading
 import time
@@ -58,6 +64,7 @@ class HintThread(threading.Thread):
         self.lines = max(1, int(lines))
         self.ranked = []           # [(move, white_relative_score)], best-first
         self.done = False
+        self.started_at = time.time()
         self.daemon = True
         self.name = f"HintThread-{gamestate.current_turn}-L{self.lines}-{time.time():.0f}"
 
@@ -84,3 +91,88 @@ class HintThread(threading.Thread):
             self.ranked = []
         finally:
             self.done = True
+
+
+class HintPool:
+    """Hint searches for several positions at once, one thread — one core — each.
+
+    The GUI used to run exactly one hint and tie it to a `generation` counter. Playing a
+    move while that search was in flight was the worst of both worlds: the result was
+    discarded when it landed, *and* the next hint could not start until it did. Three
+    quick moves therefore cost three full searches and showed an answer for none of
+    them, and because `find_best_move` held the Rust book lock for its whole duration,
+    the main thread froze the moment it asked the book anything (measured: 46s).
+
+    Here a search is keyed by the question it answers — `(fen, depth, lines)` — not by
+    when it was started, and nothing is cancelled when the board moves on. The searches
+    for the positions you walked past keep running on their own cores and file their
+    answers under their own keys, so the analysis fans out ahead of you and walking back
+    into one of those positions shows its lines immediately. Keying on the FEN also
+    replaces the generation guard outright: an answer can only ever be displayed against
+    the position it was computed for.
+
+    A Python thread cannot be killed, so `workers` is a real budget, not a hint. Every
+    slot in flight is a core busy until that search finishes; `submit` simply declines
+    when they are all taken and the caller tries again next frame.
+    """
+
+    #: Answers kept after their search finishes. Each is a handful of tuples, and they
+    #: are what makes stepping back through the game free rather than a re-search.
+    KEEP_RESULTS = 128
+
+    def __init__(self, workers=1):
+        self.workers = max(1, int(workers))
+        self._running = {}                  # key -> HintThread, in flight now
+        self._results = collections.OrderedDict()   # key -> ranked, most recent last
+
+    def set_workers(self, workers):
+        """Change the budget. Searches already in flight are left alone — they cannot
+        be stopped, and lowering the number to abandon their results as well as their
+        cores would waste the work twice."""
+        self.workers = max(1, int(workers))
+
+    def submit(self, key, gamestate, depth, lines):
+        """Start a search for `key` if it is neither answered nor already running and a
+        core is free. Returns whether a thread was started."""
+        if key in self._results or key in self._running or len(self._running) >= self.workers:
+            return False
+        thread = HintThread(gamestate, depth=depth, lines=lines)
+        thread.start()
+        self._running[key] = thread
+        return True
+
+    def reap(self):
+        """Move finished searches into the result cache. Returns the keys that landed."""
+        finished = [key for key, thread in self._running.items() if thread.done]
+        for key in finished:
+            thread = self._running.pop(key)
+            self._results[key] = [(move, score) for move, score in thread.ranked if move]
+            self._results.move_to_end(key)
+        while len(self._results) > self.KEEP_RESULTS:
+            self._results.popitem(last=False)
+        return finished
+
+    def result(self, key):
+        """The ranked lines for `key`, or None if nothing has answered it yet.
+
+        An empty list is an answer — a position with no legal moves — and is not None.
+        """
+        if key not in self._results:
+            return None
+        self._results.move_to_end(key)
+        return self._results[key]
+
+    def is_running(self, key):
+        return key in self._running
+
+    def started_at(self, key):
+        thread = self._running.get(key)
+        return thread.started_at if thread else 0.0
+
+    def active(self):
+        return len(self._running)
+
+    def forget_results(self):
+        """Drop cached answers, keeping searches in flight. For a new game, where the
+        old answers are still correct but nothing will ever ask for them again."""
+        self._results.clear()

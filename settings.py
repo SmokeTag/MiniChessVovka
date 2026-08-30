@@ -19,6 +19,7 @@ DEFAULTS = {
     "black_ai": False,
     "show_hint": False,
     "hint_lines": 1,
+    "hint_workers": 3,      # how many positions may be hinted at once, one core each
     "show_eval": True,
     "board_flipped": None,  # None = orient to whichever side the human plays
     "sound": False,
@@ -46,6 +47,33 @@ HINT_LINE_LABELS = {
     1: "best move only", 2: "2.4-3x slower", 3: "~4x slower", 4: "~5x slower",
 }
 
+# How many hint searches may run at once, each on its own core. A hint search is
+# single-threaded (root-parallel search is off by default, see CLAUDE.md), so N here
+# means N cores busy and N positions being answered side by side rather than one after
+# the other. This is the whole point of the pool: play three moves quickly with hints
+# on and all three positions get searched, instead of the first search being finished,
+# thrown away, and only then the third started.
+#
+# The ladder is clamped to the machine in `load()` -- promising 8 concurrent searches on
+# a 4-core box would just oversubscribe and make every one of them slower.
+HINT_WORKER_CHOICES = [1, 2, 3, 4, 6, 8]
+
+HINT_WORKER_LABELS = {
+    1: "one at a time", 2: "2 positions at once", 3: "3 positions at once",
+    4: "4 positions at once", 6: "6 positions at once", 8: "8 positions at once",
+}
+
+
+def hint_worker_choices():
+    """The worker ladder, capped so it never exceeds what this machine has cores for.
+
+    One core is left for the UI thread and the OS. A single-core machine still gets
+    `[1]`, which is the old one-at-a-time behaviour.
+    """
+    cap = max(1, (os.cpu_count() or 2) - 1)
+    allowed = [n for n in HINT_WORKER_CHOICES if n <= cap]
+    return allowed or [HINT_WORKER_CHOICES[0]]
+
 
 def load():
     """Return the saved settings merged over DEFAULTS."""
@@ -65,6 +93,12 @@ def load():
         values["ai_depth"] = DEFAULTS["ai_depth"]
     if values["hint_lines"] not in HINT_LINE_CHOICES:
         values["hint_lines"] = DEFAULTS["hint_lines"]
+    workers = hint_worker_choices()
+    if values["hint_workers"] not in workers:
+        # A saved value from a bigger machine is clamped rather than discarded: asking
+        # for 8 on a 4-core box should give 3, not fall back to the default.
+        values["hint_workers"] = min(workers, key=lambda n: abs(n - _as_int(
+            values["hint_workers"], DEFAULTS["hint_workers"])))
     for key in ("win_w", "win_h"):
         if values[key] is not None and not isinstance(values[key], int):
             values[key] = None
@@ -81,12 +115,21 @@ def save(values):
         print(f"[settings] could not save preferences: {exc}")
 
 
+def _as_int(value, fallback):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def _cycle(choices, current, step, fallback):
     """Move `step` places along `choices`, clamped at both ends."""
     try:
         index = choices.index(current)
     except ValueError:
-        index = choices.index(fallback)
+        # `fallback` need not be on the ladder either: `hint_worker_choices()` is
+        # capped to the machine, so the default can be off the end of it.
+        index = choices.index(fallback) if fallback in choices else 0
     index = max(0, min(len(choices) - 1, index + step))
     return choices[index]
 
@@ -97,3 +140,7 @@ def cycle_depth(current, step):
 
 def cycle_hint_lines(current, step):
     return _cycle(HINT_LINE_CHOICES, current, step, DEFAULTS["hint_lines"])
+
+
+def cycle_hint_workers(current, step):
+    return _cycle(hint_worker_choices(), current, step, DEFAULTS["hint_workers"])

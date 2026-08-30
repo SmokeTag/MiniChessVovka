@@ -570,10 +570,11 @@ fn find_best_move(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, retu
     let d = depth.unwrap_or(6);
     let top_n = return_top_n.unwrap_or(1);
 
+    // `&BOOK`, not a guard: the search locks the book only for its probe and its single
+    // store, so several searches -- and the GUI's own book queries -- run side by side.
     let ranked = py.allow_threads(|| {
-        let mut book = BOOK.lock().unwrap();
         let mut dirty = Vec::new();
-        let res = search::find_best_move(&mut gs.inner, d, top_n, &mut book, &mut dirty, time_limit, parallel);
+        let res = search::find_best_move(&mut gs.inner, d, top_n, &BOOK, &mut dirty, time_limit, parallel);
         DIRTY_KEYS.lock().unwrap().append(&mut dirty);
         res
     });
@@ -603,9 +604,8 @@ fn find_best_move(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, retu
 fn find_best_move_with_score(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, time_limit: Option<f64>, parallel: Option<bool>) -> PyResult<PyObject> {
     let d = depth.unwrap_or(6);
     let ranked = py.allow_threads(|| {
-        let mut book = BOOK.lock().unwrap();
         let mut dirty = Vec::new();
-        let res = search::find_best_move(&mut gs.inner, d, 1, &mut book, &mut dirty, time_limit, parallel);
+        let res = search::find_best_move(&mut gs.inner, d, 1, &BOOK, &mut dirty, time_limit, parallel);
         DIRTY_KEYS.lock().unwrap().append(&mut dirty);
         res
     });
@@ -691,18 +691,25 @@ fn load_analysis_from_db() -> usize {
 /// This is the bulk write the book deliberately no longer gets. Everything a session
 /// searched belongs in the cache — that is what a cache is — and nothing here can reach
 /// `book_move`, which only `save_book_position` writes.
+///
+/// Runs under `allow_threads`: this is the one book call the GUI makes on its own event
+/// loop after every search lands, and it holds both the book lock and a SQLite write
+/// transaction. Holding the GIL across that stalls the whole UI and, worse, stalls it
+/// behind a lock a background hint wants for its store.
 #[pyfunction]
-fn save_analysis_to_db() -> PyResult<usize> {
-    let book = BOOK.lock().unwrap();
-    let mut dirty = DIRTY_KEYS.lock().unwrap();
-    if dirty.is_empty() {
-        return Ok(0);
-    }
-    cache::save_entries(&book, &dirty, cache::Store::Analysis)
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    let n = dirty.len();
-    dirty.clear();
-    Ok(n)
+fn save_analysis_to_db(py: Python<'_>) -> PyResult<usize> {
+    py.allow_threads(|| {
+        let book = BOOK.lock().unwrap();
+        let mut dirty = DIRTY_KEYS.lock().unwrap();
+        if dirty.is_empty() {
+            return Ok(0);
+        }
+        cache::save_entries(&book, &dirty, cache::Store::Analysis)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let n = dirty.len();
+        dirty.clear();
+        Ok(n)
+    })
 }
 
 /// Drops the analysis tables and recreates them empty. The book is untouched.
@@ -724,16 +731,18 @@ fn book_has_row(gs: &PyGameState) -> bool {
 /// instead of quietly dropping every search it has done.
 #[pyfunction]
 #[pyo3(signature = (_cache_arg=None))]
-fn save_move_cache_to_db(_py: Python<'_>, _cache_arg: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-    let book = BOOK.lock().unwrap();
-    let mut dirty = DIRTY_KEYS.lock().unwrap();
-    if dirty.is_empty() {
-        return Ok(());
-    }
-    cache::save_book_entries(&book, &dirty)
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    dirty.clear();
-    Ok(())
+fn save_move_cache_to_db(py: Python<'_>, _cache_arg: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+    py.allow_threads(|| {
+        let book = BOOK.lock().unwrap();
+        let mut dirty = DIRTY_KEYS.lock().unwrap();
+        if dirty.is_empty() {
+            return Ok(());
+        }
+        cache::save_book_entries(&book, &dirty)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        dirty.clear();
+        Ok(())
+    })
 }
 
 /// Writes **one** position's book entry, named by the caller, and nothing else.

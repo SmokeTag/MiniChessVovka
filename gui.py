@@ -586,12 +586,22 @@ def _draw_controls(screen, layout, ui, hits):
                   note=ui.hint_lines_label,
                   at_min=not ui.can_lines_down, at_max=not ui.can_lines_up,
                   muted=not ui.show_hint)
+    # How many positions the hint pool may search side by side, one core each. The note
+    # switches to a live count while searches are in flight, because those are cores
+    # busy on positions that are not the one on screen — otherwise the machine sounds
+    # loaded for no reason the window accounts for.
+    busy = ui.hint_active
+    _draw_stepper(screen, layout, hits, mouse, row=5, name='workers',
+                  title=f"{ui.hint_workers} hint core" + ("" if ui.hint_workers == 1 else "s"),
+                  note=(f"{busy} searching" if busy else ui.hint_workers_label),
+                  at_min=not ui.can_workers_down, at_max=not ui.can_workers_up,
+                  muted=not ui.show_hint)
 
     # The only thing in this window that writes to book_move. The badge answers the
     # question a curator actually has in front of a position — is this line already in
     # my repertoire? — which the in-memory book cannot answer once the analysis cache is
     # merged into it, since both stores share one map.
-    button('save_book', layout.button_grid(5, 0, span=2), "Save position to book",
+    button('save_book', layout.button_grid(6, 0, span=2), "Save position to book",
            HIGHLIGHT_COLORS['trainer'], enabled=ui.can_save_book,
            badge="IN BOOK" if ui.in_book else "SAVE",
            badge_color=(24, 84, 48) if ui.in_book else (18, 74, 74))
@@ -657,7 +667,9 @@ def _draw_analysis(screen, layout, ui):
     ranked = ui.hint_ranked
     if not ranked:
         note = ("Finding a hint…" if ui.hint_pending else
-                "Hints are off" if not ui.show_hint else "No suggestion yet")
+                "Hints are off" if not ui.show_hint else
+                "Waiting for a free core…" if ui.hint_waiting_for_core else
+                "No suggestion yet")
         _text(screen, note, get_font(layout.font_size(12)), PANEL_COLORS['text_faint'],
               midleft=(area.x + layout.s(10), area.y + head_h + layout.analysis_row_h // 2))
         return

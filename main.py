@@ -28,7 +28,7 @@ from gamestate import GameState
 from gui import draw_frame, load_images
 from layout import DEFAULT_WIN_H, DEFAULT_WIN_W, Layout, MIN_WIN_H, MIN_WIN_W
 from pieces import EMPTY_SQUARE
-from thread_utils import AIThread, HintThread
+from thread_utils import AIThread, HintPool
 from utils import coords_to_algebraic, format_move_for_print, format_score, get_piece_color
 
 DRAG_THRESHOLD = 5          # pixels before a press becomes a drag
@@ -72,6 +72,8 @@ class UIState:
         self.hint_pending = False
         self.hint_depth = prefs['ai_depth']
         self.hint_started = 0.0
+        self.hint_workers = prefs['hint_workers']
+        self.hint_active = 0         # hint searches in flight, this one included
         self.score = None            # white-relative; None until something computes one
         self.score_source = "—"
         self.can_save_book = False   # is there a searched entry for this position?
@@ -135,6 +137,34 @@ class UIState:
         return self.hint_lines > settings.HINT_LINE_CHOICES[0]
 
     @property
+    def hint_workers_label(self):
+        return settings.HINT_WORKER_LABELS.get(self.hint_workers, "")
+
+    @property
+    def can_workers_up(self):
+        return self.hint_workers < settings.hint_worker_choices()[-1]
+
+    @property
+    def can_workers_down(self):
+        return self.hint_workers > settings.hint_worker_choices()[0]
+
+    @property
+    def hint_waiting_for_core(self):
+        """Hints are on, this position has no answer and no search of its own — every
+        worker is busy on another position. Says so rather than showing "no suggestion
+        yet", which reads as "the engine found nothing"."""
+        return (self.show_hint and not self.hint_pending and not self.hint_ranked
+                and self.hint_active >= self.hint_workers)
+
+    @property
+    def hint_background(self):
+        """Hint searches running for positions other than the one on screen.
+
+        Worth showing: those are cores busy on work the user cannot see yet, and the
+        alternative is a machine that sounds loaded for no visible reason."""
+        return max(0, self.hint_active - (1 if self.hint_pending else 0))
+
+    @property
     def analysis_rows(self):
         """Rows the analysis band reserves. Zero collapses it — hints off means the
         move list gets the pixels back."""
@@ -153,6 +183,10 @@ class UIState:
         if self.game_over:
             return "Game over"
         if self.show_hint:
+            others = self.hint_background
+            if others:
+                plural = "position" if others == 1 else "positions"
+                return f"Hint on — {others} other {plural} still searching"
             return "Hint on — no suggestion yet"
         human_turn = not (self.ai_white and self.ai_black)
         return "Your move" if human_turn else "Engine idle"
@@ -178,7 +212,7 @@ class UIState:
             return (f"{coords_to_algebraic(*self.selected_square)} selected\n"
                     "click a target, drag it, or press Esc", PANEL_COLORS['text_dim'])
         return ("← → history · U undo · F flip · H hint\n"
-                "+ − depth · [ ] hint lines · wheel over either",
+                "+ − depth · [ ] lines · , . cores · wheel over any",
                 PANEL_COLORS['text_faint'])
 
 
@@ -195,9 +229,14 @@ class Game:
         self.ui.flipped = self._default_orientation()
 
         self.ai_thread = None
-        self.hint_thread = None
-        self.generation = 0          # bumped whenever the position the engine was
-                                     # asked about stops being the current one
+        self.hints = HintPool(self.ui.hint_workers)
+        self.position_key = None     # FEN of the position on the board; recomputed on
+                                     # every `invalidate`, which is the documented seam
+                                     # for "the position changed"
+        self.hint_shown_key = None   # the key whose answer is currently on screen
+        self.generation = 0          # bumped whenever the position the *engine* was
+                                     # asked about stops being the current one. Hints
+                                     # need no such counter — see `HintPool`.
         self.last_move_at = 0.0
         self.check_cache = {}
         self.analysis_loaded = 0
@@ -257,6 +296,7 @@ class Game:
             'black_ai': self.ui.ai_black,
             'show_hint': self.ui.show_hint,
             'hint_lines': self.ui.hint_lines,
+            'hint_workers': self.ui.hint_workers,
             'board_flipped': self.ui.flipped,
         })
         settings.save(self.prefs)
@@ -278,15 +318,44 @@ class Game:
         self.ui.move_targets = []
         self.ui.drop_targets = []
         self.ui.drag = None
+        self.refresh_position_key()
         if clear_hint:
             self.ui.hint_ranked = []
             self.ui.hint_pending = False
+            self.hint_shown_key = None
         # The score described the position we just left. Fall back to the static
         # evaluation of the new one rather than leaving a stale search number up.
         self.refresh_static_score()
         self.refresh_book_state()
         self.check_cache.clear()
         self.dirty = True
+
+    def refresh_position_key(self):
+        """Name the position on the board, for the hint pool to key its searches on.
+
+        The FEN carries exactly what the Zobrist hash reads (see `fen.rs`), so two
+        positions share a key only if they really are the same position — which is what
+        lets an answer computed three moves ago light up the instant you undo back into
+        it. Recomputed here rather than per frame because it costs a Rust state rebuild,
+        and `invalidate` is the one place the position is allowed to change.
+        """
+        try:
+            self.position_key = ai.to_fen(self.gs)
+        except Exception as exc:
+            # Without a key the pool simply does not run; the GUI stays usable.
+            print(f"[hint] could not name the position: {exc}")
+            self.position_key = None
+
+    def hint_key(self):
+        """What the hint for the position on screen is being asked. `None` if unaskable.
+
+        Depth and line count are part of it: both change the search, so an answer at
+        one setting is not an answer at another — and stepping back to the old setting
+        finds the old answer still cached.
+        """
+        if self.position_key is None:
+            return None
+        return (self.position_key, self.ui.depth, self.ui.hint_lines)
 
     def refresh_static_score(self):
         """Show `eval.rs`'s static evaluation until a search replaces it.
@@ -532,7 +601,11 @@ class Game:
         self.gs.black_ai_enabled = self.ui.ai_black
         self.gs.ai_depth = self.ui.depth
         self.ai_thread = None
-        self.hint_thread = None
+        # Answers from the game just abandoned can never be asked for again, and the
+        # searches still in flight belong to it too — but those cannot be stopped, so
+        # they are left to finish and fill the analysis cache.
+        self.hints.forget_results()
+        self.hint_shown_key = None
         self.ui.thinking = False
         self.ui.history = []
         self.ui.view_ply = self.ui.live_ply = 0
@@ -615,38 +688,94 @@ class Game:
         # user asks for it: see `save_to_book`.
 
     def start_hint_if_needed(self):
-        if (not self.ui.show_hint or self.hint_thread or self.ui.hint_ranked
-                or self.gs.needs_promotion_choice or self.game_finished()
-                or self.is_ai_turn()):
+        """Ask the pool for the position on screen. Cheap enough to call every frame.
+
+        Nothing is cancelled and nothing waits: if every worker is busy this is a no-op
+        and the next frame tries again, while the searches already running finish and
+        file their answers under their own positions. That is the point — play three
+        moves in a row and all three get searched, instead of the first search running
+        to completion, being thrown away, and only then letting the third start.
+        """
+        if (not self.ui.show_hint or self.gs.needs_promotion_choice
+                or self.game_finished() or self.is_ai_turn()):
+            return
+        key = self.hint_key()
+        if key is None:
             return
         # The selected depth, not a private cap: with both AI toggles off this is the
         # only search the app runs, so clamping it here is clamping the depth control.
-        depth = self.ui.depth
-        thread = HintThread(self.gs, depth=depth, lines=self.ui.hint_lines)
-        thread.generation = self.generation
-        thread.start()
-        self.hint_thread = thread
-        self.ui.hint_pending = True
-        self.ui.hint_depth = depth
-        self.ui.hint_started = time.time()
-        self.dirty = True
+        if self.hints.submit(key, self.gs, self.ui.depth, self.ui.hint_lines):
+            # Mark it pending here rather than waiting for the next `poll_hint`, or the
+            # frame drawn in between shows the idle status for a search that has already
+            # started — the spinner would come up one frame late.
+            self.ui.hint_pending = True
+            self.ui.hint_depth = self.ui.depth
+            self.ui.hint_started = self.hints.started_at(key)
+            self.ui.hint_active = self.hints.active()
+            self.dirty = True
 
     def poll_hint(self):
-        thread = self.hint_thread
-        if not thread or not thread.done:
+        """Show whatever the pool holds for the position on screen.
+
+        The display is a function of the pool and the current position, not of which
+        thread happened to finish — so a hint can only ever appear against the position
+        it was computed for, and an answer that lands for a position the user has since
+        left is kept rather than discarded.
+        """
+        landed = self.hints.reap()
+        if landed:
+            # Every finished search added rows to the in-memory analysis cache, whoever
+            # it was for. One flush covers all of them.
+            self.flush_analysis()
+            self.refresh_book_state()
+
+        # A cached answer must not reappear once the question is withdrawn: hints off,
+        # or the engine to move, means nothing goes on screen even though the pool may
+        # still hold — and still be computing — a perfectly good answer.
+        if not self.ui.show_hint or self.is_ai_turn():
+            if self.hint_shown_key is not None or self.ui.hint_pending:
+                self.ui.hint_ranked = []
+                self.ui.hint_pending = False
+                self.hint_shown_key = None
+                self.dirty = True
+            active = self.hints.active()
+            if active != self.ui.hint_active:
+                # The core count in the panel is still live even with hints off: the
+                # searches already running drain, and the note has to follow them down.
+                self.ui.hint_active = active
+                self.dirty = True
             return
-        self.hint_thread = None
-        self.ui.hint_pending = False
+
+        key = self.hint_key()
+        active = self.hints.active()
+        pending = key is not None and self.hints.is_running(key)
+        ranked = self.hints.result(key) if key is not None else None
+
+        if active != self.ui.hint_active or pending != self.ui.hint_pending:
+            self.dirty = True
+        self.ui.hint_active = active
+        self.ui.hint_pending = pending
+        if pending:
+            self.ui.hint_depth = self.ui.depth
+            self.ui.hint_started = self.hints.started_at(key)
+
+        if ranked is None:
+            if self.hint_shown_key is not None:
+                self.ui.hint_ranked = []
+                self.hint_shown_key = None
+                self.dirty = True
+            return
+        if key == self.hint_shown_key:
+            return
+        # Newly on screen: either this search just landed, or the board walked back into
+        # a position something already answered.
+        self.ui.hint_ranked = list(ranked)
+        self.hint_shown_key = key
         self.dirty = True
-        if thread.generation != self.generation:
-            return
-        self.ui.hint_ranked = [(move, score) for move, score in thread.ranked if move]
-        self.flush_analysis()
-        self.refresh_book_state()
-        # The hint searched the live position, so rank 1's score is a better answer
-        # than the static evaluation currently on screen.
+        # The hint searched the position on the board, so rank 1's score is a better
+        # answer than the static evaluation currently on screen.
         if self.ui.hint_ranked:
-            self.set_search_score(self.ui.hint_ranked[0][1], thread.depth)
+            self.set_search_score(self.ui.hint_ranked[0][1], key[1])
 
     # --- selection ---------------------------------------------------------
 
@@ -710,9 +839,15 @@ class Game:
             self.toast(f"Depth {depth} is the {edge} setting.", PANEL_COLORS['warn'])
             return
         self.ui.depth = self.gs.ai_depth = depth
-        # A hint computed at the old depth is no longer the answer to the
-        # question the depth control now asks.
+        # A hint computed at the old depth is no longer the answer to the question the
+        # depth control now asks. `hint_key` folds the depth in, so the hint side needs
+        # no more than taking it off screen.
         self.drop_hint()
+        # The engine's own move does need the counter: a search already in flight would
+        # otherwise land and be played at the depth the user just moved away from. This
+        # used to happen inside `drop_hint`, which is why it is spelled out here now —
+        # the other two callers of `drop_hint` change nothing about the engine's move.
+        self.generation += 1
         self.toast(f"Engine depth {depth} — {settings.DEPTH_LABELS.get(depth, '')}.",
                    PANEL_COLORS['text_dim'])
         self.dirty = True
@@ -740,16 +875,48 @@ class Game:
         self.toast(f"Hint shows {lines} {plural} — {note}." if note else
                    f"Hint shows {lines} {plural}.", PANEL_COLORS['text_dim'])
 
-    def drop_hint(self):
-        """Abandon the hint on screen and the search behind it.
+    def set_hint_workers(self, workers):
+        """How many positions the hint pool may search at once, one core each.
 
-        Bumping the generation is what makes the in-flight `HintThread` land as a
-        result for a superseded question, so it is discarded rather than applied.
+        Raising it takes effect on the next frame; lowering it does not stop searches
+        already running, because a Python thread cannot be stopped. The toast says so
+        rather than leaving the user to wonder why the fans are still going.
+        """
+        if workers == self.ui.hint_workers:
+            edge = "most" if workers == settings.hint_worker_choices()[-1] else "fewest"
+            self.toast(f"{workers} is the {edge} this machine will run at once.",
+                       PANEL_COLORS['warn'])
+            return
+        lowering = workers < self.ui.hint_workers
+        self.ui.hint_workers = workers
+        self.hints.set_workers(workers)
+        self.dirty = True
+        if not self.ui.show_hint:
+            self.toast(f"Hints will search {workers} at once — turn hints on to use it.",
+                       PANEL_COLORS['warn'])
+            return
+        note = settings.HINT_WORKER_LABELS.get(workers, "")
+        running = self.hints.active()
+        if lowering and running > workers:
+            self.toast(f"Hint searches {note}.\n"
+                       f"{running} already running will finish first.",
+                       PANEL_COLORS['text_dim'])
+            return
+        self.toast(f"Hint searches {note}." if note else
+                   f"Hint searches {workers} at once.", PANEL_COLORS['text_dim'])
+
+    def drop_hint(self):
+        """Take the hint off screen, because the question changed.
+
+        It does not stop the search behind it, and does not need to: `hint_key` folds
+        depth and line count into the key, so a search started under the old setting
+        files its answer under the old key and stays out of the way. It is not wasted
+        either — stepping the setting back finds it cached, and its rows are in the
+        analysis cache regardless.
         """
         self.ui.hint_ranked = []
         self.ui.hint_pending = False
-        self.hint_thread = None
-        self.generation += 1
+        self.hint_shown_key = None
         self.dirty = True
 
     def toggle_ai(self, color):
@@ -793,6 +960,10 @@ class Game:
             self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, 1))
         elif name == 'lines_down':
             self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, -1))
+        elif name == 'workers_up':
+            self.set_hint_workers(settings.cycle_hint_workers(self.ui.hint_workers, 1))
+        elif name == 'workers_down':
+            self.set_hint_workers(settings.cycle_hint_workers(self.ui.hint_workers, -1))
         elif name == 'save_book':
             self.save_to_book()
 
@@ -855,6 +1026,8 @@ class Game:
                 self.set_depth(settings.cycle_depth(self.ui.depth, step))
             elif name == 'lines':
                 self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, step))
+            elif name == 'workers':
+                self.set_hint_workers(settings.cycle_hint_workers(self.ui.hint_workers, step))
             return True
         return False
 
@@ -981,6 +1154,10 @@ class Game:
             self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, 1))
         elif key == pygame.K_LEFTBRACKET:
             self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, -1))
+        elif key == pygame.K_PERIOD:
+            self.set_hint_workers(settings.cycle_hint_workers(self.ui.hint_workers, 1))
+        elif key == pygame.K_COMMA:
+            self.set_hint_workers(settings.cycle_hint_workers(self.ui.hint_workers, -1))
         elif key in (pygame.K_r, pygame.K_n, pygame.K_b) and self.gs.needs_promotion_choice:
             upper = chr(key).upper()
             self.finish_promotion(upper if self.gs.current_turn == 'w' else upper.lower())
@@ -1065,6 +1242,7 @@ class Game:
         self.resize(*self.initial_window_size())
         load_images()
         self.sync_ui()
+        self.refresh_position_key()
         self.refresh_static_score()
         self.refresh_book_state()
         self.toast(f"Book {ai.book_size() - self.analysis_loaded} positions · "

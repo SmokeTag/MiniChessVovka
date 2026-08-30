@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::types::*;
@@ -1037,6 +1037,15 @@ fn multipv_root(
 /// `dirty` collects the position hashes this call wrote, so the caller can persist just
 /// those instead of rewriting the whole book.
 ///
+/// `book` is taken as a `&Mutex` rather than a `&mut`, and that is load-bearing: the book
+/// is touched exactly twice here -- the probe at the top and the single store at the
+/// bottom -- so the lock is held for microseconds at each end and *not* for the seconds
+/// or minutes in between. Holding it across the search serialises every caller onto one
+/// search at a time, and because `lib.rs`'s book accessors (`book_has_position`,
+/// `save_analysis_to_db`, ...) do not release the GIL while they wait for it, a GUI
+/// thread that merely asked "is this position in the book?" froze for the whole duration
+/// of a background hint -- 46s, measured, at depth 10 with four lines.
+///
 /// Returns the ranked moves, best-first **for the side to move**, with white-relative
 /// scores: White's list runs non-increasing and Black's non-decreasing, so rank 1 is
 /// always the move that side wants and the sign never depends on whose turn it is. The
@@ -1045,7 +1054,7 @@ pub fn find_best_move(
     gs: &mut GameState,
     depth: i32,
     top_n: i32,
-    book: &mut Book,
+    book: &Mutex<Book>,
     dirty: &mut Vec<String>,
     time_limit: Option<f64>,
     parallel: Option<bool>,
@@ -1055,7 +1064,11 @@ pub fn find_best_move(
     let pos_hash_str = gs.hash.to_string();
     let want_ranks = top_n.max(1) as usize;
 
-    if let Some((ranked, hit_depth)) = probe_book(gs, book, &pos_hash_str, depth, want_ranks) {
+    let probed = {
+        let guard = book.lock().unwrap();
+        probe_book(gs, &guard, &pos_hash_str, depth, want_ranks)
+    };
+    if let Some((ranked, hit_depth)) = probed {
         eprintln!(
             "[BOOK HIT] {} rank(s) at depth {} (requested {}) in {:.2}s",
             ranked.len(),
@@ -1195,7 +1208,7 @@ pub fn find_best_move(
             // One book entry per search: the ranks this search produced, at the depth it
             // actually reached, with the FEN that makes the hash mean something.
             book_store(
-                book,
+                &mut book.lock().unwrap(),
                 dirty,
                 &pos_hash_str,
                 crate::fen::to_fen(gs),

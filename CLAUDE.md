@@ -251,11 +251,24 @@ pixel dimension, and nothing does any more: `config.SQUARE_SIZE` is gone along w
 commented-out vector primitives, which were its only importer. Four invariants are load-bearing and
 easy to undo by accident:
 
-- **The search never blocks the UI.** `main.Game` polls a worker thread and keeps drawing;
-  Undo / New game / Flip / Hint stay live during a search. Results carry a `generation` tag
-  and are discarded if the position moved on, so taking back a move mid-search cannot apply a
-  stale answer to the wrong board. Anything that changes the position must call
-  `Game.invalidate()` (which bumps the generation) or that guarantee breaks.
+- **The search never blocks the UI.** `main.Game` polls worker threads and keeps drawing;
+  Undo / New game / Flip / Hint stay live during a search. The engine's *own* move carries a
+  `generation` tag and is discarded if the position moved on, so taking back a move mid-search
+  cannot apply a stale answer to the wrong board. Anything that changes the position must call
+  `Game.invalidate()` (which bumps the generation, and re-derives `Game.position_key`) or that
+  guarantee breaks. Hints do not use the counter — see **Hints run several at a time**.
+
+  This invariant was broken from Rust, not from Python, and the Python side gave no sign of it:
+  `search::find_best_move` used to hold the process-global `BOOK` mutex for the **whole** search,
+  and `lib.rs`'s book accessors take the same lock **without releasing the GIL**. So the main
+  thread calling `ai.book_has_position` — which `invalidate` does on every single move, via
+  `refresh_book_state` — blocked on a lock a background hint would not give up for another
+  46 seconds, holding the GIL the entire time. Play a move with hints on and the window was dead
+  until that hint finished. The book is touched exactly twice in a search (the probe at the top,
+  one store at the bottom), so `find_best_move` now takes `&Mutex<Book>` and locks at those two
+  points only. **Do not put the lock back around the search**, and do not add a book accessor to
+  `lib.rs` that holds it across a DB write without `py.allow_threads` (`save_analysis_to_db` and
+  `save_move_cache_to_db` both wrap themselves for this reason).
 - **Panel zones have fixed heights** (`layout.py`): header, controls and the bottom status band
   are reserved, and only the move list flexes. Hands live in strips beside the board rather
   than in the panel, and show a `×N` count instead of one sprite per copy — both so that a
@@ -280,8 +293,9 @@ control can never be clickable where it is not visible — and the promotion pic
 other region, which is what stops clicks reaching the buttons underneath it.
 
 `gui_settings.json` (gitignored) remembers window size, depth, AI toggles, hints, how many hint
-lines to show, and orientation. Both AI toggles default to **off** — a fresh start is
-human-vs-human, and each side is opted in by its own button.
+lines to show, how many hint searches may run at once (`hint_workers`), and orientation. Both AI
+toggles default to **off** — a fresh start is human-vs-human, and each side is opted in by its own
+button.
 
 **The GUI never writes to the book on its own.** `poll_ai` used to call
 `save_move_cache_to_db` after every engine move, which flushed the *entire* `DIRTY_KEYS`
@@ -335,6 +349,37 @@ position change (`Game.refresh_static_score`) and is overwritten by a completed 
 labels itself `depth N` — "static" and "depth 10" are different claims about the same number,
 so the source is always shown. `eval.rs` encodes a mate as a flat ±`CHECKMATE_SCORE` with no
 distance in it, so the display says "White mates", never "M3".
+
+**Hints run several at a time, one core each.** `thread_utils.HintPool` keys every hint search by
+the question it answers — `(fen, depth, lines)` — and starts up to `hint_workers` of them at once.
+Nothing is cancelled when the board moves on: play three moves quickly with hints on and all three
+positions are searched side by side, so the analysis fans out ahead of you instead of trailing
+behind. Answers are cached (`KEEP_RESULTS`), so stepping back into a position you walked past
+shows its lines with no search at all.
+
+The old single `hint_thread` was the worst of both worlds — `start_hint_if_needed` refused to
+start the next hint while one was in flight, and `poll_hint` then threw that one's result away on
+a `generation` mismatch. A burst of three moves cost three full searches and displayed none of
+them. Keying on the FEN removes the generation guard from this path outright: a late answer is not
+stale, it is an answer to a different question, and worth keeping. Measured on a 24-core box at
+depth 10 with 2 lines, three positions whose searches took 6s / 46s / 84s finished in 84s
+concurrently instead of 136s serially, with a worst main-loop iteration of 0.6 ms throughout.
+
+Things to keep in mind here:
+
+- **A Python thread cannot be stopped**, so `hint_workers` is a hard budget, not a hint. `submit`
+  declines when every slot is taken and the caller retries next frame; lowering the setting does
+  not free a core that is already busy, and `set_hint_workers` says so.
+- **`hint_key` folds depth and line count in.** That is what makes `drop_hint` cheap — a search
+  started under the old setting files its answer under the old key and stays out of the way, and
+  stepping the setting back finds it cached. It is also why `set_depth` bumps `generation` itself
+  now: `drop_hint` no longer does, and the engine's own move still has to be invalidated.
+- **`poll_hint` gates the display on `show_hint` and whose turn it is.** The pool keeps answering
+  positions regardless; without the gate a cached hint would reappear the moment hints were
+  switched off, since nothing clears the cache.
+- **The ladder is capped to the machine** (`settings.hint_worker_choices`, `cpu_count - 1`).
+  A hint search is single-threaded — root-parallel search is off by default — so N workers means
+  N cores busy. Turning `set_parallel_search` on as well would oversubscribe.
 
 **More than one hint line means MultiPV.** `HintThread(lines=n)` with `n > 1` calls
 `find_best_move(..., return_top_n=n)`, which is 2.4–4.4x a single-PV search at the same depth —

@@ -92,9 +92,9 @@ class Layout:
         header_h = self.s(26) + self.s(34) + eval_h + self.s(30) + 4 * self.s(6)
         self.header = pygame.Rect(inner_x, pad, inner_w, header_h)
 
-        # Controls: 6 button rows. Fixed height, so the move list below can never
+        # Controls: 7 button rows. Fixed height, so the move list below can never
         # push them and they can never push it.
-        controls_h = 6 * btn_h + 5 * btn_gap
+        controls_h = 7 * btn_h + 6 * btn_gap
         self.controls = pygame.Rect(inner_x, self.header.bottom + self.s(10), inner_w, controls_h)
 
         # Analysis band: one row per requested hint line, plus a header. Zero rows
