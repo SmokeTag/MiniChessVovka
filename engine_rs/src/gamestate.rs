@@ -299,10 +299,15 @@ impl GameState {
         }
 
         let color = self.current_turn;
+        let already_in_check = self.is_in_check(color);
         let pseudo = self.generate_pseudo_legal_moves(color);
         let mut legal = Vec::with_capacity(pseudo.len());
 
         for m in pseudo {
+            if m.is_drop() && !already_in_check {
+                legal.push(m);
+                continue;
+            }
             self.make_ai_move(m);
             let in_check = self.is_in_check(color);
             self.undo_ai_move();
@@ -324,10 +329,15 @@ impl GameState {
         }
 
         let color = self.current_turn;
+        let already_in_check = self.is_in_check(color);
         let pseudo = self.generate_pseudo_legal_moves(color);
         let mut legal = Vec::with_capacity(pseudo.len());
 
         for m in pseudo {
+            if m.is_drop() && !already_in_check {
+                legal.push(m);
+                continue;
+            }
             self.make_ai_move(m);
             let in_check = self.is_in_check(color);
             self.undo_ai_move();
