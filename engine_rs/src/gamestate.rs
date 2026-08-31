@@ -43,6 +43,16 @@ pub struct GameState {
     pending_undo: Option<UndoInfo>,
 
     legal_moves_cache: Option<Vec<Move>>,
+    in_check_cache: Option<bool>,
+}
+
+#[inline]
+fn shares_queen_line(a: usize, b: usize) -> bool {
+    let ar = sq_row(a) as i32;
+    let af = sq_file(a) as i32;
+    let br = sq_row(b) as i32;
+    let bf = sq_file(b) as i32;
+    ar == br || af == bf || (ar - br).abs() == (af - bf).abs()
 }
 
 impl GameState {
@@ -67,6 +77,7 @@ impl GameState {
             ai_history: Vec::with_capacity(128),
             pending_undo: None,
             legal_moves_cache: None,
+            in_check_cache: None,
         }
     }
 
@@ -96,6 +107,7 @@ impl GameState {
         self.ai_history.clear();
         self.pending_undo = None;
         self.legal_moves_cache = None;
+        self.in_check_cache = None;
         self.hash = self.compute_hash();
 
         self.is_draw = false;
@@ -132,6 +144,7 @@ impl GameState {
 
     pub fn invalidate_cache(&mut self) {
         self.legal_moves_cache = None;
+        self.in_check_cache = None;
     }
 
     fn gen_pawn_moves(&self, r: usize, f: usize, color: Color, moves: &mut Vec<Move>) {
@@ -299,10 +312,18 @@ impl GameState {
         }
 
         let color = self.current_turn;
+        let already_in_check = self.side_to_move_in_check();
         let pseudo = self.generate_pseudo_legal_moves(color);
         let mut legal = Vec::with_capacity(pseudo.len());
 
+        let king_sq = self.king_pos[color.index()];
         for m in pseudo {
+            if !already_in_check
+                && (m.is_drop() || !shares_queen_line(m.from_sq(), king_sq))
+            {
+                legal.push(m);
+                continue;
+            }
             self.make_ai_move(m);
             let in_check = self.is_in_check(color);
             self.undo_ai_move();
@@ -324,10 +345,18 @@ impl GameState {
         }
 
         let color = self.current_turn;
+        let already_in_check = self.side_to_move_in_check();
         let pseudo = self.generate_pseudo_legal_moves(color);
         let mut legal = Vec::with_capacity(pseudo.len());
 
+        let king_sq = self.king_pos[color.index()];
         for m in pseudo {
+            if !already_in_check
+                && (m.is_drop() || !shares_queen_line(m.from_sq(), king_sq))
+            {
+                legal.push(m);
+                continue;
+            }
             self.make_ai_move(m);
             let in_check = self.is_in_check(color);
             self.undo_ai_move();
@@ -410,6 +439,15 @@ impl GameState {
         false
     }
 
+    pub fn side_to_move_in_check(&mut self) -> bool {
+        if let Some(v) = self.in_check_cache {
+            return v;
+        }
+        let v = self.is_in_check(self.current_turn);
+        self.in_check_cache = Some(v);
+        v
+    }
+
     pub fn is_in_check(&self, color: Color) -> bool {
         let king_sq = self.king_pos[color.index()];
         self.is_square_attacked(king_sq, color.opposite())
@@ -453,6 +491,9 @@ impl GameState {
 
     pub fn make_ai_move(&mut self, m: Move) {
         let prev_hash = self.hash;
+        let hands_before = self.hands;
+        let promoted_before = self.promoted_pieces;
+        let mut h = prev_hash ^ zobrist::ZOBRIST.turn_black;
         let mut undo = UndoInfo {
             mov: m,
             captured: Piece::Empty,
@@ -473,6 +514,7 @@ impl GameState {
             let piece = Piece::from_color_type(color, pt);
 
             self.board[to] = piece;
+            h ^= zobrist::ZOBRIST.piece_square[piece as usize][to];
             self.hands[color.index()][pt.index()] -= 1;
             self.last_move = m;
             self.current_turn = self.current_turn.opposite();
@@ -503,7 +545,11 @@ impl GameState {
                 undo.moved_promoted = true;
             }
 
+            if target != Piece::Empty {
+                h ^= zobrist::ZOBRIST.piece_square[target as usize][to];
+            }
             self.board[from] = Piece::Empty;
+            h ^= zobrist::ZOBRIST.piece_square[piece as usize][from];
             if let Some(promo_pt) = m.promotion() {
                 self.board[to] = Piece::from_color_type(color, promo_pt);
                 self.promoted_pieces |= 1u64 << to;
@@ -511,6 +557,7 @@ impl GameState {
             } else {
                 self.board[to] = piece;
             }
+            h ^= zobrist::ZOBRIST.piece_square[self.board[to] as usize][to];
 
             if piece.piece_type() == Some(PieceType::King) {
                 undo.prev_king_pos = Some(self.king_pos[color.index()]);
@@ -523,7 +570,26 @@ impl GameState {
 
         self.ai_history.push(undo);
         self.legal_moves_cache = None;
-        self.hash = self.compute_hash();
+        self.in_check_cache = None;
+
+        let mut promo_diff = promoted_before ^ self.promoted_pieces;
+        while promo_diff != 0 {
+            let s = promo_diff.trailing_zeros() as usize;
+            h ^= zobrist::ZOBRIST.promoted[s];
+            promo_diff &= promo_diff - 1;
+        }
+        for color in 0..2usize {
+            for pt in 0..5usize {
+                let old = hands_before[color][pt] as usize;
+                let new = self.hands[color][pt] as usize;
+                if old != new {
+                    if old > 0 { h ^= zobrist::ZOBRIST.hand[color][pt][old.min(7)]; }
+                    if new > 0 { h ^= zobrist::ZOBRIST.hand[color][pt][new.min(7)]; }
+                }
+            }
+        }
+        self.hash = h;
+        debug_assert_eq!(self.hash, self.compute_hash(), "incremental hash diverged");
     }
 
     pub fn undo_ai_move(&mut self) {
@@ -588,11 +654,13 @@ impl GameState {
         self.stalemate = undo.prev_stalemate;
         self.last_move = undo.prev_last_move;
         self.legal_moves_cache = None;
+        self.in_check_cache = None;
         self.hash = undo.prev_hash;
     }
 
     pub fn make_move(&mut self, m: Move, check_game_over: bool) -> bool {
         self.legal_moves_cache = None;
+        self.in_check_cache = None;
 
         if self.needs_promotion_choice {
             return false;
@@ -765,6 +833,7 @@ impl GameState {
         self.promotion_square = None;
         self.current_turn = self.current_turn.opposite();
         self.legal_moves_cache = None;
+        self.in_check_cache = None;
         self.hash = self.compute_hash();
 
         if let Some(mut undo) = self.pending_undo.take() {
@@ -799,6 +868,7 @@ impl GameState {
             ai_history: Vec::new(),
             pending_undo: self.pending_undo.clone(),
             legal_moves_cache: None,
+            in_check_cache: None,
         }
     }
 
@@ -809,6 +879,44 @@ impl GameState {
                 Piece::WhiteKing => self.king_pos[0] = s,
                 Piece::BlackKing => self.king_pos[1] = s,
                 _ => {}
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    #[test]
+    fn incremental_hash_matches_a_full_recompute() {
+        let mut rng = StdRng::seed_from_u64(0x1234_5678);
+        for game in 0..200u64 {
+            let mut gs = GameState::new();
+            gs.setup_initial_board();
+            assert_eq!(gs.hash, gs.compute_hash(), "setup hash wrong");
+
+            let mut made = 0usize;
+            for _ in 0..60 {
+                let moves = gs.get_legal_moves_vec();
+                if moves.is_empty() {
+                    break;
+                }
+                let m = moves[rng.gen_range(0..moves.len())];
+                gs.make_ai_move(m);
+                made += 1;
+                assert_eq!(
+                    gs.hash,
+                    gs.compute_hash(),
+                    "game {} diverged after make_ai_move {:?}",
+                    game, m
+                );
+            }
+            for _ in 0..made {
+                gs.undo_ai_move();
+                assert_eq!(gs.hash, gs.compute_hash(), "game {} diverged after undo", game);
             }
         }
     }

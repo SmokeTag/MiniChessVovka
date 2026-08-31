@@ -11,6 +11,35 @@ use crate::zobrist;
 
 const MAX_QUIESCENCE_DEPTH: i32 = 4;
 
+#[derive(Default, Clone, Copy)]
+pub struct MixHasher(u64);
+
+impl std::hash::Hasher for MixHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        let mut z = self.0;
+        z ^= z >> 33;
+        z = z.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        z ^= z >> 33;
+        z
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    #[inline]
+    fn write_u64(&mut self, n: u64) { self.0 = n; }
+    #[inline]
+    fn write_u32(&mut self, n: u32) { self.0 = n as u64; }
+    #[inline]
+    fn write_i32(&mut self, n: i32) { self.0 = n as u64; }
+}
+
+type MixBuild = std::hash::BuildHasherDefault<MixHasher>;
+type FastMap<K, V> = HashMap<K, V, MixBuild>;
+
 const DEFAULT_PARALLEL_MIN_DEPTH: i32 = 3;
 static PARALLEL_ENABLED: AtomicBool = AtomicBool::new(false);
 static PARALLEL_MIN_DEPTH: AtomicI32 = AtomicI32::new(DEFAULT_PARALLEL_MIN_DEPTH);
@@ -45,10 +74,10 @@ pub enum TTFlag {
 }
 
 pub struct SearchState {
-    pub tt: HashMap<u64, TTEntry>,
-    pub base_tt: Option<Arc<HashMap<u64, TTEntry>>>,
-    pub killer_moves: HashMap<i32, [Move; 2]>,
-    pub history_scores: HashMap<u32, i32>,
+    pub tt: FastMap<u64, TTEntry>,
+    pub base_tt: Option<Arc<FastMap<u64, TTEntry>>>,
+    pub killer_moves: FastMap<i32, [Move; 2]>,
+    pub history_scores: FastMap<u32, i32>,
     pub deadline: Option<Instant>,
     pub stopped: bool,
     nodes_since_check: u32,
@@ -61,10 +90,10 @@ impl SearchState {
 
     pub fn with_tt_capacity(cap: usize) -> Self {
         SearchState {
-            tt: HashMap::with_capacity(cap),
+            tt: FastMap::with_capacity_and_hasher(cap, MixBuild::default()),
             base_tt: None,
-            killer_moves: HashMap::new(),
-            history_scores: HashMap::new(),
+            killer_moves: FastMap::default(),
+            history_scores: FastMap::default(),
             deadline: None,
             stopped: false,
             nodes_since_check: 0,
@@ -225,8 +254,7 @@ fn is_noisy_move(gs: &GameState, m: Move) -> bool {
 
 fn is_check_move(gs: &mut GameState, m: Move) -> bool {
     gs.make_ai_move(m);
-    let opponent = gs.current_turn;
-    let in_check = gs.is_in_check(opponent);
+    let in_check = gs.side_to_move_in_check();
     gs.undo_ai_move();
     in_check
 }
@@ -286,7 +314,7 @@ fn quiescence_search(gs: &mut GameState, mut alpha: i32, mut beta: i32, maximizi
 
     let legal = gs.get_legal_moves_vec();
     if legal.is_empty() {
-        if gs.is_in_check(gs.current_turn) {
+        if gs.side_to_move_in_check() {
             return if gs.current_turn == Color::White { -CHECKMATE_SCORE } else { CHECKMATE_SCORE };
         }
         return STALEMATE_SCORE;
@@ -355,7 +383,11 @@ fn minimax_ab(
     }
 
     let current_color = if maximizing { Color::White } else { Color::Black };
-    let in_check = gs.is_in_check(current_color);
+    let in_check = if current_color == gs.current_turn {
+        gs.side_to_move_in_check()
+    } else {
+        gs.is_in_check(current_color)
+    };
     if in_check && depth > 0 && depth < 3 {
         depth += 1;
     }
@@ -370,7 +402,7 @@ fn minimax_ab(
 
     let mut legal_moves = gs.get_legal_moves_vec();
     if legal_moves.is_empty() {
-        if gs.is_in_check(gs.current_turn) {
+        if gs.side_to_move_in_check() {
             return (if gs.current_turn == Color::White { -CHECKMATE_SCORE } else { CHECKMATE_SCORE }, Move::NULL);
         }
         return (STALEMATE_SCORE, Move::NULL);
@@ -390,9 +422,10 @@ fn minimax_ab(
     }
 
     let null_move_r = 2;
+    let is_pv = beta.saturating_sub(alpha) > 1;
     let opponent_color = current_color.opposite();
     let opponent_hand: u8 = gs.hands[opponent_color.index()].iter().sum();
-    if allow_null && depth >= null_move_r + 1 && !in_check && opponent_hand == 0 {
+    if allow_null && !is_pv && depth >= null_move_r + 1 && !in_check && opponent_hand == 0 {
         gs.current_turn = gs.current_turn.opposite();
         gs.hash = gs.compute_hash();
         gs.invalidate_cache();
@@ -401,8 +434,14 @@ fn minimax_ab(
         gs.hash = gs.compute_hash();
         gs.invalidate_cache();
 
-        if maximizing && null_score >= beta { return (beta, Move::NULL); }
-        if !maximizing && null_score <= alpha { return (alpha, Move::NULL); }
+        let fails_high = if maximizing { null_score >= beta } else { null_score <= alpha };
+        if fails_high && !ss.stopped {
+            let (verified, _) = minimax_ab(gs, depth - null_move_r, alpha, beta, maximizing, false, ss);
+            let confirmed = if maximizing { verified >= beta } else { verified <= alpha };
+            if confirmed {
+                return (if maximizing { beta } else { alpha }, Move::NULL);
+            }
+        }
     }
 
     let tt_best = tt_entry.as_ref().map(|e| e.best_move).unwrap_or(Move::NULL);
@@ -422,7 +461,9 @@ fn minimax_ab(
         })
         .collect();
     scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-    legal_moves = scored.into_iter().map(|(m, _)| m).collect();
+    for (slot, &(m, _)) in legal_moves.iter_mut().zip(scored.iter()) {
+        *slot = m;
+    }
 
     let orig_alpha = alpha;
     let orig_beta = beta;
@@ -436,7 +477,7 @@ fn minimax_ab(
         for (i, &m) in legal_moves.iter().enumerate() {
             let noisy = is_noisy_move(gs, m);
             gs.make_ai_move(m);
-            let gives_check = gs.is_in_check(gs.current_turn);
+            let gives_check = gs.side_to_move_in_check();
 
             let eval_score;
             if i == 0 {
@@ -490,7 +531,7 @@ fn minimax_ab(
         for (i, &m) in legal_moves.iter().enumerate() {
             let noisy = is_noisy_move(gs, m);
             gs.make_ai_move(m);
-            let gives_check = gs.is_in_check(gs.current_turn);
+            let gives_check = gs.side_to_move_in_check();
 
             let eval_score;
             if i == 0 {
@@ -542,11 +583,11 @@ fn minimax_ab(
     }
 }
 
-type SharedTT = Arc<HashMap<u64, TTEntry>>;
+type SharedTT = Arc<FastMap<u64, TTEntry>>;
 
 struct RootHeuristics {
-    killer_moves: HashMap<i32, [Move; 2]>,
-    history_scores: HashMap<u32, i32>,
+    killer_moves: FastMap<i32, [Move; 2]>,
+    history_scores: FastMap<u32, i32>,
 }
 
 fn search_worker(
