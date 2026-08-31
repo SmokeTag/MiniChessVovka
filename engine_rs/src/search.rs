@@ -11,6 +11,35 @@ use crate::zobrist;
 
 const MAX_QUIESCENCE_DEPTH: i32 = 4;
 
+#[derive(Default, Clone, Copy)]
+pub struct MixHasher(u64);
+
+impl std::hash::Hasher for MixHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        let mut z = self.0;
+        z ^= z >> 33;
+        z = z.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        z ^= z >> 33;
+        z
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    #[inline]
+    fn write_u64(&mut self, n: u64) { self.0 = n; }
+    #[inline]
+    fn write_u32(&mut self, n: u32) { self.0 = n as u64; }
+    #[inline]
+    fn write_i32(&mut self, n: i32) { self.0 = n as u64; }
+}
+
+type MixBuild = std::hash::BuildHasherDefault<MixHasher>;
+type FastMap<K, V> = HashMap<K, V, MixBuild>;
+
 const DEFAULT_PARALLEL_MIN_DEPTH: i32 = 3;
 static PARALLEL_ENABLED: AtomicBool = AtomicBool::new(false);
 static PARALLEL_MIN_DEPTH: AtomicI32 = AtomicI32::new(DEFAULT_PARALLEL_MIN_DEPTH);
@@ -45,10 +74,10 @@ pub enum TTFlag {
 }
 
 pub struct SearchState {
-    pub tt: HashMap<u64, TTEntry>,
-    pub base_tt: Option<Arc<HashMap<u64, TTEntry>>>,
-    pub killer_moves: HashMap<i32, [Move; 2]>,
-    pub history_scores: HashMap<u32, i32>,
+    pub tt: FastMap<u64, TTEntry>,
+    pub base_tt: Option<Arc<FastMap<u64, TTEntry>>>,
+    pub killer_moves: FastMap<i32, [Move; 2]>,
+    pub history_scores: FastMap<u32, i32>,
     pub deadline: Option<Instant>,
     pub stopped: bool,
     nodes_since_check: u32,
@@ -61,10 +90,10 @@ impl SearchState {
 
     pub fn with_tt_capacity(cap: usize) -> Self {
         SearchState {
-            tt: HashMap::with_capacity(cap),
+            tt: FastMap::with_capacity_and_hasher(cap, MixBuild::default()),
             base_tt: None,
-            killer_moves: HashMap::new(),
-            history_scores: HashMap::new(),
+            killer_moves: FastMap::default(),
+            history_scores: FastMap::default(),
             deadline: None,
             stopped: false,
             nodes_since_check: 0,
@@ -429,7 +458,9 @@ fn minimax_ab(
         })
         .collect();
     scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-    legal_moves = scored.into_iter().map(|(m, _)| m).collect();
+    for (slot, &(m, _)) in legal_moves.iter_mut().zip(scored.iter()) {
+        *slot = m;
+    }
 
     let orig_alpha = alpha;
     let orig_beta = beta;
@@ -549,11 +580,11 @@ fn minimax_ab(
     }
 }
 
-type SharedTT = Arc<HashMap<u64, TTEntry>>;
+type SharedTT = Arc<FastMap<u64, TTEntry>>;
 
 struct RootHeuristics {
-    killer_moves: HashMap<i32, [Move; 2]>,
-    history_scores: HashMap<u32, i32>,
+    killer_moves: FastMap<i32, [Move; 2]>,
+    history_scores: FastMap<u32, i32>,
 }
 
 fn search_worker(
