@@ -45,6 +45,15 @@ pub struct GameState {
     legal_moves_cache: Option<Vec<Move>>,
 }
 
+#[inline]
+fn shares_queen_line(a: usize, b: usize) -> bool {
+    let ar = sq_row(a) as i32;
+    let af = sq_file(a) as i32;
+    let br = sq_row(b) as i32;
+    let bf = sq_file(b) as i32;
+    ar == br || af == bf || (ar - br).abs() == (af - bf).abs()
+}
+
 impl GameState {
     pub fn new() -> Self {
         GameState {
@@ -303,8 +312,11 @@ impl GameState {
         let pseudo = self.generate_pseudo_legal_moves(color);
         let mut legal = Vec::with_capacity(pseudo.len());
 
+        let king_sq = self.king_pos[color.index()];
         for m in pseudo {
-            if m.is_drop() && !already_in_check {
+            if !already_in_check
+                && (m.is_drop() || !shares_queen_line(m.from_sq(), king_sq))
+            {
                 legal.push(m);
                 continue;
             }
@@ -333,8 +345,11 @@ impl GameState {
         let pseudo = self.generate_pseudo_legal_moves(color);
         let mut legal = Vec::with_capacity(pseudo.len());
 
+        let king_sq = self.king_pos[color.index()];
         for m in pseudo {
-            if m.is_drop() && !already_in_check {
+            if !already_in_check
+                && (m.is_drop() || !shares_queen_line(m.from_sq(), king_sq))
+            {
                 legal.push(m);
                 continue;
             }
