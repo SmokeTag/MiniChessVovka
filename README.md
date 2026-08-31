@@ -172,7 +172,6 @@ tests/                  ← Test suite
 | Doc | Content |
 |-----|---------|
 | [Evaluation Strategy](docs/evaluation_strategy.md) | Detailed scoring heuristics |
-| [Improvement Roadmap](docs/IMPROVEMENTS.md) | Planned enhancements |
 | [Parallel Search](docs/PARALLEL_SEARCH.md) | Record of the root-parallel search evaluation |
 
 ## 📝 License
@@ -358,7 +357,6 @@ tests/                  ← Тесты
 | Документ | Содержание |
 |----------|------------|
 | [Стратегия оценки](docs/evaluation_strategy.md) | Подробные эвристики оценки |
-| [План улучшений](docs/IMPROVEMENTS.md) | Запланированные доработки |
 | [Параллельный поиск](docs/PARALLEL_SEARCH.md) | Отчёт об оценке параллельного поиска |
 
 ## 📝 Лицензия

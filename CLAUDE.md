@@ -422,10 +422,10 @@ non-zero.
 - `bot_start.sh` rewrites `play_online.py` in place with `sed -i ''` to flip rated/casual — BSD syntax
   that fails on Linux. Set `rated=` in `create_minihouse_game` by hand rather than assuming the mode
   switched.
-- `config.py`'s eval constants (`CENTER_BONUS`, `KING_SAFETY_BONUS`, `PIECE_VALUES` in `pieces.py`, …)
-  are dead weight from the pre-Rust era — the numbers that decide moves are the `const`s at the top of
-  `engine_rs/src/eval.rs`. Editing the Python ones changes nothing, and editing the Rust ones means
-  bumping `EVAL_VERSION` in the same file.
+- The numbers that decide moves are the `const`s at the top of `engine_rs/src/eval.rs`
+  (`CENTER_BONUS`, `KING_SAFETY_BONUS`, `PIECE_VALUES`); there is no Python copy of them any more.
+  Editing one means bumping `EVAL_VERSION` in the same file, or the book keeps serving scores from
+  the evaluation you just replaced.
 - **There is no self-play.** `src/self_play.py`, `src/scheduled_self_play.py` and the `train*.sh`
   runners are deleted; nothing in the repo plays AI-vs-AI from a script. The closest things left are
   `tests/test_ai_optimization.py` and `bench/`.
