@@ -254,8 +254,7 @@ fn is_noisy_move(gs: &GameState, m: Move) -> bool {
 
 fn is_check_move(gs: &mut GameState, m: Move) -> bool {
     gs.make_ai_move(m);
-    let opponent = gs.current_turn;
-    let in_check = gs.is_in_check(opponent);
+    let in_check = gs.side_to_move_in_check();
     gs.undo_ai_move();
     in_check
 }
@@ -315,7 +314,7 @@ fn quiescence_search(gs: &mut GameState, mut alpha: i32, mut beta: i32, maximizi
 
     let legal = gs.get_legal_moves_vec();
     if legal.is_empty() {
-        if gs.is_in_check(gs.current_turn) {
+        if gs.side_to_move_in_check() {
             return if gs.current_turn == Color::White { -CHECKMATE_SCORE } else { CHECKMATE_SCORE };
         }
         return STALEMATE_SCORE;
@@ -384,7 +383,11 @@ fn minimax_ab(
     }
 
     let current_color = if maximizing { Color::White } else { Color::Black };
-    let in_check = gs.is_in_check(current_color);
+    let in_check = if current_color == gs.current_turn {
+        gs.side_to_move_in_check()
+    } else {
+        gs.is_in_check(current_color)
+    };
     if in_check && depth > 0 && depth < 3 {
         depth += 1;
     }
@@ -399,7 +402,7 @@ fn minimax_ab(
 
     let mut legal_moves = gs.get_legal_moves_vec();
     if legal_moves.is_empty() {
-        if gs.is_in_check(gs.current_turn) {
+        if gs.side_to_move_in_check() {
             return (if gs.current_turn == Color::White { -CHECKMATE_SCORE } else { CHECKMATE_SCORE }, Move::NULL);
         }
         return (STALEMATE_SCORE, Move::NULL);
@@ -474,7 +477,7 @@ fn minimax_ab(
         for (i, &m) in legal_moves.iter().enumerate() {
             let noisy = is_noisy_move(gs, m);
             gs.make_ai_move(m);
-            let gives_check = gs.is_in_check(gs.current_turn);
+            let gives_check = gs.side_to_move_in_check();
 
             let eval_score;
             if i == 0 {
@@ -528,7 +531,7 @@ fn minimax_ab(
         for (i, &m) in legal_moves.iter().enumerate() {
             let noisy = is_noisy_move(gs, m);
             gs.make_ai_move(m);
-            let gives_check = gs.is_in_check(gs.current_turn);
+            let gives_check = gs.side_to_move_in_check();
 
             let eval_score;
             if i == 0 {

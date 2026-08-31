@@ -43,6 +43,7 @@ pub struct GameState {
     pending_undo: Option<UndoInfo>,
 
     legal_moves_cache: Option<Vec<Move>>,
+    in_check_cache: Option<bool>,
 }
 
 #[inline]
@@ -76,6 +77,7 @@ impl GameState {
             ai_history: Vec::with_capacity(128),
             pending_undo: None,
             legal_moves_cache: None,
+            in_check_cache: None,
         }
     }
 
@@ -105,6 +107,7 @@ impl GameState {
         self.ai_history.clear();
         self.pending_undo = None;
         self.legal_moves_cache = None;
+        self.in_check_cache = None;
         self.hash = self.compute_hash();
 
         self.is_draw = false;
@@ -141,6 +144,7 @@ impl GameState {
 
     pub fn invalidate_cache(&mut self) {
         self.legal_moves_cache = None;
+        self.in_check_cache = None;
     }
 
     fn gen_pawn_moves(&self, r: usize, f: usize, color: Color, moves: &mut Vec<Move>) {
@@ -308,7 +312,7 @@ impl GameState {
         }
 
         let color = self.current_turn;
-        let already_in_check = self.is_in_check(color);
+        let already_in_check = self.side_to_move_in_check();
         let pseudo = self.generate_pseudo_legal_moves(color);
         let mut legal = Vec::with_capacity(pseudo.len());
 
@@ -341,7 +345,7 @@ impl GameState {
         }
 
         let color = self.current_turn;
-        let already_in_check = self.is_in_check(color);
+        let already_in_check = self.side_to_move_in_check();
         let pseudo = self.generate_pseudo_legal_moves(color);
         let mut legal = Vec::with_capacity(pseudo.len());
 
@@ -433,6 +437,15 @@ impl GameState {
         }
 
         false
+    }
+
+    pub fn side_to_move_in_check(&mut self) -> bool {
+        if let Some(v) = self.in_check_cache {
+            return v;
+        }
+        let v = self.is_in_check(self.current_turn);
+        self.in_check_cache = Some(v);
+        v
     }
 
     pub fn is_in_check(&self, color: Color) -> bool {
@@ -557,6 +570,7 @@ impl GameState {
 
         self.ai_history.push(undo);
         self.legal_moves_cache = None;
+        self.in_check_cache = None;
 
         let mut promo_diff = promoted_before ^ self.promoted_pieces;
         while promo_diff != 0 {
@@ -640,11 +654,13 @@ impl GameState {
         self.stalemate = undo.prev_stalemate;
         self.last_move = undo.prev_last_move;
         self.legal_moves_cache = None;
+        self.in_check_cache = None;
         self.hash = undo.prev_hash;
     }
 
     pub fn make_move(&mut self, m: Move, check_game_over: bool) -> bool {
         self.legal_moves_cache = None;
+        self.in_check_cache = None;
 
         if self.needs_promotion_choice {
             return false;
@@ -817,6 +833,7 @@ impl GameState {
         self.promotion_square = None;
         self.current_turn = self.current_turn.opposite();
         self.legal_moves_cache = None;
+        self.in_check_cache = None;
         self.hash = self.compute_hash();
 
         if let Some(mut undo) = self.pending_undo.take() {
@@ -851,6 +868,7 @@ impl GameState {
             ai_history: Vec::new(),
             pending_undo: self.pending_undo.clone(),
             legal_moves_cache: None,
+            in_check_cache: None,
         }
     }
 
