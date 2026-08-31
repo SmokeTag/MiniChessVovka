@@ -134,7 +134,8 @@ echo "=================================="
 echo "Repertoire build: $WORKERS workers, up to ply $MAX_PLY, depth $DEPTH"
 echo "  resign cutoff:  $RESIGN"
 echo "  opponent breadth: $BREADTH (scan depth $SCAN_DEPTH)"
-echo "  logs:           $LOG_DIR/stage-P-worker-N.log"
+echo "  logs:           $LOG_DIR/stage-P-worker-N.log  (progress)"
+echo "                  $LOG_DIR/stage-P-worker-N.err  (engine chatter + any traceback)"
 echo "  database:       book.db"
 echo "=================================="
 
@@ -161,20 +162,47 @@ for (( ply = 4; ply <= MAX_PLY; ply += 2 )); do
     echo
     echo "--- stage $ply ($WORKERS shards, --split-ply $SPLIT) ---$CAPPED"
     : > "$PID_FILE"
+    STAGE_PIDS=()
     for (( i = 0; i < WORKERS; i++ )); do
         # stderr is the engine's per-depth chatter: one line per iterative-deepening
-        # iteration per search, which is most of the volume. Kept out of the main log.
+        # iteration per search, which is most of the volume. It is kept out of the main
+        # log but deliberately NOT discarded -- a worker that dies unexpectedly does so
+        # by printing a traceback here and nowhere else. Sending it to /dev/null is what
+        # let 17 of 22 shards vanish mid-queue on the ply-12 build leaving no record of
+        # why, which no amount of after-the-fact forensics could recover.
         "$PY" -u build_book.py \
             --max-ply "$ply" --split-ply "$SPLIT" --depth "$DEPTH" \
             --resign "$RESIGN" --opponent-breadth "$BREADTH" --scan-depth "$SCAN_DEPTH" \
             --shard "$i/$WORKERS" \
-            > "$LOG_DIR/stage-$ply-worker-$i.log" 2>/dev/null &
+            > "$LOG_DIR/stage-$ply-worker-$i.log" \
+            2> "$LOG_DIR/stage-$ply-worker-$i.err" &
+        STAGE_PIDS+=($!)
         echo $! >> "$PID_FILE"
     done
-    wait
+    # Wait per pid rather than with a bare `wait`, so a shard that dies is named at the
+    # end of its stage instead of being folded silently into the entry total. 130 is
+    # build_book.py's own "stopped by SIGTERM" exit and is not a failure; anything else
+    # non-zero is, and the reason is in the .err file the message points at.
+    FAILED=0
+    for (( i = 0; i < WORKERS; i++ )); do
+        wait "${STAGE_PIDS[$i]}"; rc=$?
+        if [ "$rc" -eq 0 ] || [ "$rc" -eq 130 ]; then
+            continue
+        fi
+        FAILED=$(( FAILED + 1 ))
+        echo "  !! shard $i/$WORKERS exited $rc — see $LOG_DIR/stage-$ply-worker-$i.err"
+        tail -n 3 "$LOG_DIR/stage-$ply-worker-$i.err" 2>/dev/null | sed 's/^/       | /'
+    done
     NEW=$(grep -h 'new entries:' "$LOG_DIR"/stage-"$ply"-worker-*.log 2>/dev/null \
           | awk '{s += $NF} END {print s+0}')
     echo "  stage $ply done: $NEW new entries across $WORKERS shards, $(( $(date +%s) - STARTED ))s total"
+    if [ "$FAILED" -gt 0 ]; then
+        # A tier with a dead shard is not finished, and the next stage will build on the
+        # hole. Re-running the same command re-walks and fills it, so say so here rather
+        # than letting the entry count read as success.
+        echo "  !! $FAILED of $WORKERS shards did not finish: this tier is INCOMPLETE."
+        echo "     Re-run the same command once you know why — the walk is idempotent."
+    fi
     ./build_status.sh 2>/dev/null | sed -n '/book.db:/,$p' | sed 's/^/  /'
 done
 

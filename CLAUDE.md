@@ -161,6 +161,15 @@ Things about *running* it that are easy to get wrong:
 - **`build_stop.sh` signals a recorded pid, never a name.** `pkill -f build_book_parallel.sh`
   also matches the shell you typed the command into, and kills it. The driver writes `$$` to
   `book_build.pid` for exactly this reason.
+- **Worker stderr is kept, and a dead shard is named.** Each worker writes progress to
+  `stage-P-worker-N.log` and stderr to `stage-P-worker-N.err` (both under `logs/`, gitignored).
+  The `.err` file is mostly the engine's per-depth `[ID]` chatter, but it is also the *only* place
+  a worker's traceback lands. It used to go to `/dev/null`: on the ply-12 build 17 of 22 shards
+  exited mid-queue and nothing anywhere recorded why — not the journal, not a coredump, not the
+  logs. The stage now waits per pid instead of with a bare `wait`, so a non-zero exit is printed
+  with the tail of its `.err` and the tier is called **INCOMPLETE** rather than being folded
+  silently into the stage's entry count. Exit 130 is `build_book.py`'s own "stopped by SIGTERM"
+  and is not a failure. Re-running the same command refills whatever a dead shard left behind.
 - **Saves are incremental.** `save_move_cache_to_db` used to re-`INSERT OR REPLACE` the process's
   entire cache after *every move* — ~5µs/row, so ~1.3s per move once a worker holds 250k entries,
   times N workers on one write lock. `search::find_best_move` now returns the position hashes it
@@ -180,10 +189,38 @@ Things about *running* it that are easy to get wrong:
   intact so the work is still recoverable. `rebuild_book.py` is the only thing that deletes rows
   wholesale; `migrate_book.py` deletes none unless `--drop-orphans` says to, and refuses otherwise.
 
-Depth 10 costs roughly: median ~3s/move, p90 ~12s, worst seen ~31s — crazyhouse midgames with full
-hands are far more expensive than the opening. Measured on the ply-6 build: ~3.5s/search at plies
-0-2, but ~20s/search at plies 5-6, where both sides have pieces in hand. Budget for the tail, not
-for the root. Workers
+Depth 10 costs vary by orders of magnitude with how full the hands are, and the opening is no
+guide at all to the tail. On the ply-6 build the root tiers measured ~3.5s/search at plies 0-2 and
+~20s/search at plies 5-6. Past that it gets much worse, fast. A ladder on one *ordinary*
+hand-heavy ply-9 position (`2b2k/5p/6/3N2/2K3/6[NRpbr] b`, single-PV, cold process, no book) grows
+~3.4x per ply:
+
+```
+depth     6      7      8       9        10
+time   10.1s  38.5s  98.5s   395s    ~22min   (10 extrapolated from the ratio)
+```
+
+Measured on the ply-12 build: a stage-12 shard visits ~10,500 nodes in 36,000-47,000s, but ~8,200
+of those are the plies 0-8 prefix coming back from `probe_book` at ~0s. The whole budget goes to
+the ~2,400 nodes at plies 9-12 — **~15-20s per node**, counting the opponent-reply scan each one
+triggers.
+
+On top of that average sits a very long tail with no known ceiling. Worst single search measured:
+**one depth-10 node ran ~12.6 hours** (stage 12, shard 8: the 25-node block holding it took
+45,633s, against 158-966s for each of the four blocks after it). Single moves of ~2,000s at one
+line and ~4,200s at four lines are routine sightings, not outliers. Budget for the tail, not for
+the root.
+
+**Do not "fix" this with a time limit.** `build_book.py` passes `time_limit=None` deliberately. The
+deadline breaks the iterative-deepening loop (`search.rs:1195`) and `book_store` then files the row
+at `depth_completed` — the last iteration that *finished*, not the one asked for. `probe_book`
+rejects any row shallower than the requested depth, so a truncated node is re-searched on every
+future walk, forever: the same trap documented above for mate rows, and the most expensive mistake
+this build has made. A capped search does not make the tail cheaper, it makes it permanent.
+
+What the tail does cost is **barrier time**: a stage ends only when its slowest shard does, so one
+12-hour node leaves the other 21 workers idle for 12 hours. That is a real price of the staging and
+it is accepted — the alternative is an unusable book row. Workers
 load the DB only at startup, so they do not see each other's entries until restarted — which is why
 the build is staged rather than one long run.
 
