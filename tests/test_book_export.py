@@ -33,7 +33,6 @@ import import_book
 import minichess_engine as engine
 from gamestate import GameState
 
-
 def _seed_book(n_positions=6, depth=4):
     """Search a handful of real positions and file them, so there is a book to export."""
     ai.setup_db()
@@ -47,7 +46,6 @@ def _seed_book(n_positions=6, depth=4):
         gs.make_move(moves[i % len(moves)])
     ai.save_move_cache_to_db()
 
-
 def _rows(db_path):
     conn = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
     try:
@@ -58,7 +56,6 @@ def _rows(db_path):
     finally:
         conn.close()
 
-
 def _hashes(db_path):
     conn = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True)
     try:
@@ -67,7 +64,6 @@ def _hashes(db_path):
             " JOIN book_move m ON m.hash = p.hash GROUP BY p.hash"))
     finally:
         conn.close()
-
 
 class TestBookExportRoundTrip(IsolatedCacheDB):
 
@@ -78,7 +74,6 @@ class TestBookExportRoundTrip(IsolatedCacheDB):
 
         export_book.export("book.db", "book", "book.tsv")
 
-        # Wipe and rebuild from the text alone.
         ai.rebuild_book()
         self.assertEqual(_rows("book.db"), [], "rebuild_book left rows behind")
 
@@ -92,7 +87,6 @@ class TestBookExportRoundTrip(IsolatedCacheDB):
             conn.close()
 
         self.assertEqual(_rows("book.db"), before, "a row changed across the round trip")
-        # The point of keying on FEN: the hashes must be re-derivable, not merely stored.
         self.assertEqual(_hashes("book.db"), before_hashes,
                          "a position came back under a different hash")
 

@@ -1,27 +1,14 @@
 use crate::types::*;
 use crate::gamestate::GameState;
 
-// --- Evaluation Constants for 6x6 Crazyhouse ---
-// Tuned for: small board, drops dominate tactics, pawn promo race is key,
-// king safety is life-or-death, 90s/move allows deep search.
-
-/// Identifies the evaluation that produced a stored score.
-///
-/// **Bump this by hand whenever any constant or term below changes.** Every book row
-/// carries the version it was written under, and a probe refuses rows from any other
-/// one: a score from a different evaluation is not comparable with a fresh one, so
-/// ranking the two together would order the book by which build searched it. Bumping
-/// invalidates the book without dropping it -- old rows are ignored and re-searched in
-/// place. Nothing detects a stale value automatically; that is the point of the comment.
 pub const EVAL_VERSION: i32 = 1;
 
 const CENTER_SQUARES: [usize; 4] = [
-    2 * BOARD_SIZE + 2, // (2,2)
-    2 * BOARD_SIZE + 3, // (2,3)
-    3 * BOARD_SIZE + 2, // (3,2)
-    3 * BOARD_SIZE + 3, // (3,3)
+    2 * BOARD_SIZE + 2,
+    2 * BOARD_SIZE + 3,
+    3 * BOARD_SIZE + 2,
+    3 * BOARD_SIZE + 3,
 ];
-// Wider center: also reward (1,2),(1,3),(4,2),(4,3) — extended center
 const EXTENDED_CENTER: [usize; 8] = [
     1 * BOARD_SIZE + 2, 1 * BOARD_SIZE + 3,
     4 * BOARD_SIZE + 2, 4 * BOARD_SIZE + 3,
@@ -94,7 +81,6 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
     let mut white_pawns: Vec<(usize, usize)> = Vec::new();
     let mut black_pawns: Vec<(usize, usize)> = Vec::new();
 
-    // 1. Material + center + king safety proximity
     for s in 0..NUM_SQUARES {
         let piece = gs.board[s];
         if piece.is_empty() { continue; }
@@ -128,7 +114,6 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
         }
     }
 
-    // Hand material — pieces in hand are worth more (instant deployment)
     let wh_total: u8 = gs.hands[0].iter().sum();
     let bh_total: u8 = gs.hands[1].iter().sum();
     for pt in 0..5 {
@@ -137,16 +122,13 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
         score -= HAND_PIECE_VALUES[pt] * gs.hands[1][pt] as i32;
         total_material += PIECE_VALUES[pt] * gs.hands[1][pt] as i32;
     }
-    // Progressive drop threat: more pieces in hand = exponentially more dangerous
     let w_drop_threat = (wh_total as i32) * DROP_THREAT_BONUS + (wh_total as i32).max(1) * (wh_total as i32 - 1).max(0) * 10;
     let b_drop_threat = (bh_total as i32) * DROP_THREAT_BONUS + (bh_total as i32).max(1) * (bh_total as i32 - 1).max(0) * 10;
     score += w_drop_threat;
     score -= b_drop_threat;
 
-    // Phase detection
     let endgame = total_material < 2 * PIECE_VALUES[PieceType::Rook.index()] + 2 * PIECE_VALUES[PieceType::King.index()];
 
-    // 2. Mobility proxy
     let (mut wm, mut bmo) = (0i32, 0i32);
     for s in 0..NUM_SQUARES {
         let piece = gs.board[s];
@@ -173,12 +155,10 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
     }
     score += (wm - bmo) * MOBILITY_BONUS;
 
-    // 3. Pawn structure
     for &(r, c) in &white_pawns {
         if c > 0 && gs.board[sq(r, c - 1)] == Piece::WhitePawn { score += PAWN_STRUCTURE_BONUS; }
         if c < BOARD_SIZE - 1 && gs.board[sq(r, c + 1)] == Piece::WhitePawn { score += PAWN_STRUCTURE_BONUS; }
         if r > 0 && gs.board[sq(r - 1, c)] != Piece::Empty { score -= BLOCKED_PAWN_PENALTY; }
-        // Passed pawn
         let mut is_passed = true;
         let mut path_clear = true;
         for scan_r in (0..r).rev() {
@@ -188,8 +168,7 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
             if gs.board[sq(scan_r, c)] != Piece::Empty { path_clear = false; }
         }
         if is_passed {
-            // Reduced: pawn promotes to R/N/B max (not Queen), opponent can block via drops
-            let steps = r; // steps to row 0
+            let steps = r;
             let bonus = match steps { 1 => 180, 2 => 70, 3 => 25, 4 => 10, _ => 5 };
             score += bonus;
             if path_clear {
@@ -222,7 +201,6 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
         }
     }
 
-    // 4. King safety — pawn shield (critical in crazyhouse)
     {
         let mut w_shield = 0i32;
         for dc in -1..=1i32 {
@@ -256,7 +234,6 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
         }
         if !endgame && is_center(gs.king_pos[1]) { score += 40; }
 
-        // NEW: King on edge bonus in opening (corners are safer in crazyhouse)
         if !endgame {
             let w_edge = (wk_r == 5 || wk_c == 0 || wk_c == 5) as i32;
             let b_edge = (bk_r == 0 || bk_c == 0 || bk_c == 5) as i32;
@@ -265,13 +242,11 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
         }
     }
 
-    // Endgame king activity
     if endgame {
         if is_center(gs.king_pos[0]) { score += 20; }
         if is_center(gs.king_pos[1]) { score -= 20; }
     }
 
-    // 5. Development (opening) — stronger penalty for undeveloped pieces
     if !endgame {
         let mut w_undev = 0i32;
         for c in 0..BOARD_SIZE {
@@ -292,7 +267,6 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
         score += b_undev * 20;
     }
 
-    // 6. King attack zone
     {
         let mut w_atk = 0.0f32;
         let mut b_atk = 0.0f32;
@@ -340,10 +314,8 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
         score -= (b_atk * ATTACK_KING_ZONE_BONUS as f32) as i32;
     }
 
-    // 7. Tempo
     score += if gs.current_turn == Color::White { 10 } else { -10 };
 
-    // 8. Drop pawn near promotion (reduced — opponent can block via drops)
     if gs.hands[0][PieceType::Pawn.index()] > 0 {
         let mut spots = 0;
         for c in 0..BOARD_SIZE {
@@ -359,8 +331,6 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
         if spots > 0 { score -= DROP_PAWN_PROMO_BONUS + (spots - 1) * 25; }
     }
 
-    // NEW: 8b. Drop-check threat — can we drop a piece giving check?
-    // Knight in hand that can drop to check enemy king = huge threat
     if gs.hands[0][PieceType::Knight.index()] > 0 {
         for &(dr, df) in &KNIGHT_OFFSETS {
             let nr = bk_r + dr;
@@ -368,7 +338,7 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
             if nr >= 0 && nr < BOARD_SIZE as i32 && nf >= 0 && nf < BOARD_SIZE as i32 {
                 if gs.board[sq(nr as usize, nf as usize)].is_empty() {
                     score += 40;
-                    break; // one drop-check square is enough
+                    break;
                 }
             }
         }
@@ -386,9 +356,7 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
         }
     }
 
-    // Rook/Bishop in hand near enemy king file/diagonal = latent threat
     if gs.hands[0][PieceType::Rook.index()] > 0 {
-        // Can drop rook on enemy king's rank or file
         for c in 0..BOARD_SIZE {
             if gs.board[sq(bk_r as usize, c)].is_empty() { score += 25; break; }
         }
@@ -399,7 +367,6 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
         }
     }
 
-    // 9. Rook on open/semi-open file
     for s in 0..NUM_SQUARES {
         let piece = gs.board[s];
         if piece.is_empty() { continue; }
@@ -431,7 +398,6 @@ pub fn evaluate_position(gs: &GameState) -> i32 {
         }
     }
 
-    // 10. Bishop pair
     let mut wb = 0;
     let mut bb = 0;
     for s in 0..NUM_SQUARES {

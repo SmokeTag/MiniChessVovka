@@ -30,21 +30,18 @@ import copy
 from datetime import datetime
 from pathlib import Path
 
-# ── Load environment variables from .env if exists ──────────
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # python-dotenv not installed, will use env vars or CLI args
+    pass
 
-# ── Playwright import ───────────────────────────────────────
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
     print("❌ Need playwright. Run: pip install playwright && python -m playwright install chromium")
     sys.exit(1)
 
-# ── MiniChess engine imports ────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
 from gamestate import GameState
 import ai as ai_module
@@ -53,14 +50,12 @@ from config import BOARD_SIZE
 from pieces import EMPTY_SQUARE
 from utils import coords_to_algebraic, format_move_for_print
 
-# ── Config ──────────────────────────────────────────────────
 CHESS_COM_URL = "https://www.chess.com"
 
 def _parse_account_args():
     """Parse --email, --password, --account from sys.argv (before argparse)."""
     import argparse
     parser = argparse.ArgumentParser(add_help=False)
-    # Credentials from CLI args > env vars
     parser.add_argument('--email', default=os.getenv('CHESS_COM_EMAIL'))
     parser.add_argument('--password', default=os.getenv('CHESS_COM_PASSWORD'))
     parser.add_argument('--account', default=None, help='Account tag for separate profile dirs')
@@ -68,7 +63,6 @@ def _parse_account_args():
     parser.add_argument('--games', type=int, default=None, help='Max number of games to play (auto mode)')
     args, _ = parser.parse_known_args()
     
-    # Validate credentials are provided
     if not args.email or not args.password:
         print("⚠️  Chess.com credentials not provided (will rely on saved Chrome session)")
         print("   If login fails, set CHESS_COM_EMAIL/CHESS_COM_PASSWORD in .env")
@@ -85,7 +79,6 @@ STATE_FILE = Path(__file__).parent / f".chess_com_chrome_state{_acct_suffix}.jso
 OUTPUT_DIR = Path(__file__).parent / f".bot_screenshots{_acct_suffix}"
 HEARTBEAT_FILE = Path(__file__).parent / f".bot_heartbeat{_acct_suffix}"
 
-# Credentials from args (which loaded from env or CLI)
 EMAIL = _acct.email
 PASSWORD = _acct.password
 
@@ -106,14 +99,6 @@ STEALTH_SCRIPT = """
 })();
 """
 
-# ── Board mapping ───────────────────────────────────────────
-# chess.com 6x6: square-XY where X=file(1-6), Y=rank(1-6)
-# Our board: row 0 = rank 6 (top), row 5 = rank 1 (bottom)
-# Our board: col 0 = file a (=1), col 5 = file f (=6)
-
-# chess.com piece classes for minihouse:
-# wp=white pawn, wn=white knight, wb=white bishop, wr=white rook, wq=white queen, wk=white king
-# bp, bn, bb, br, bq, bk = black pieces
 CHESSCOM_TO_PIECE = {
     'wp': 'P', 'wn': 'N', 'wb': 'B', 'wr': 'R', 'wq': 'Q', 'wk': 'K',
     'bp': 'p', 'bn': 'n', 'bb': 'b', 'br': 'r', 'bq': 'q', 'bk': 'k',
@@ -121,30 +106,25 @@ CHESSCOM_TO_PIECE = {
 
 PIECE_TO_CHESSCOM = {v: k for k, v in CHESSCOM_TO_PIECE.items()}
 
-# Variants site uses data-piece (uppercase letter) + data-color (5=white, 6=black)
 VARIANTS_COLOR_MAP = {'5': 'w', '6': 'b'}
 VARIANTS_PIECE_MAP = {
     ('P', '5'): 'P', ('N', '5'): 'N', ('B', '5'): 'B', ('R', '5'): 'R', ('Q', '5'): 'Q', ('K', '5'): 'K',
     ('P', '6'): 'p', ('N', '6'): 'n', ('B', '6'): 'b', ('R', '6'): 'r', ('Q', '6'): 'q', ('K', '6'): 'k',
 }
 
-# Grid constants: 8x8 grid with 6x6 playable area (grid 1-6), walls at 0 and 7
-GRID_OFFSET = 1  # playable area starts at grid position 1
-
+GRID_OFFSET = 1
 
 def square_xy_to_internal(x, y):
     """chess.com square-XY (1-indexed file, rank) → internal (row, col)."""
-    col = x - 1  # file 1 → col 0
-    row = BOARD_SIZE - y  # rank 6 → row 0, rank 1 → row 5
+    col = x - 1
+    row = BOARD_SIZE - y
     return row, col
-
 
 def internal_to_square_xy(row, col):
     """Internal (row, col) → chess.com square-XY (1-indexed)."""
     x = col + 1
     y = BOARD_SIZE - row
     return x, y
-
 
 def grid_to_internal(grid_col, grid_row, flipped=False):
     """Variants 8x8 grid position → internal (row, col) for 6x6 board.
@@ -161,7 +141,6 @@ def grid_to_internal(grid_col, grid_row, flipped=False):
         internal_row = grid_row - GRID_OFFSET
     return internal_row, internal_col
 
-
 def internal_to_grid(row, col, flipped=False):
     """Internal (row, col) → variants 8x8 grid position."""
     if flipped:
@@ -172,21 +151,16 @@ def internal_to_grid(row, col, flipped=False):
         grid_row = row + GRID_OFFSET
     return grid_col, grid_row
 
-
-# ── Chrome helpers (from research-automation) ───────────────
-
 def _find_chrome():
     for p in CHROME_PATHS:
         if os.path.exists(p):
             return p
     return None
 
-
 def _free_port():
     with socket.socket() as s:
         s.bind(("", 0))
         return s.getsockname()[1]
-
 
 def heartbeat(status="alive", extra=""):
     """Write heartbeat file with timestamp + status for monitor_bot.sh to check."""
@@ -197,7 +171,6 @@ def heartbeat(status="alive", extra=""):
     except Exception:
         pass
 
-
 def _screenshot(page, name):
     out = OUTPUT_DIR / f"{name}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -206,7 +179,6 @@ def _screenshot(page, name):
         print(f"   📸 {out}")
     except Exception:
         pass
-
 
 def launch_chrome(profile_dir):
     chrome = _find_chrome()
@@ -233,14 +205,12 @@ def launch_chrome(profile_dir):
         "--window-size=1440,900",
     ]
     
-    # Headless mode for Linux servers without display (not macOS which has Aqua)
     import platform
     if platform.system() != 'Darwin' and not os.environ.get("DISPLAY"):
         args += ["--headless=new", "--no-sandbox", "--disable-gpu"]
     
     args.append("about:blank")
     
-    # Kill any lingering Chrome with our profile before launching
     try:
         result = subprocess.run(["pgrep", "-f", str(profile_dir)], capture_output=True, text=True)
         for pid_str in result.stdout.strip().split('\n'):
@@ -277,14 +247,12 @@ def launch_chrome(profile_dir):
     STATE_FILE.write_text(json.dumps({"pid": proc.pid, "port": port, "profile": str(profile_dir)}))
     return proc, port
 
-
 def _chrome_alive(pid):
     try:
         os.kill(pid, 0)
         return True
     except (OSError, ProcessLookupError):
         return False
-
 
 def _cdp_alive(port):
     try:
@@ -295,7 +263,6 @@ def _cdp_alive(port):
         return True
     except Exception:
         return False
-
 
 def get_or_launch_chrome(profile_dir):
     if STATE_FILE.exists():
@@ -309,7 +276,6 @@ def get_or_launch_chrome(profile_dir):
             pass
     return launch_chrome(profile_dir)
 
-
 def connect_cdp(pw, port):
     for attempt in range(10):
         try:
@@ -321,7 +287,6 @@ def connect_cdp(pw, port):
                 return None
             time.sleep(1)
 
-
 def setup_stealth(context, page):
     try:
         client = context.new_cdp_session(page)
@@ -330,12 +295,8 @@ def setup_stealth(context, page):
     except Exception:
         pass
 
-
-# ── Login ───────────────────────────────────────────────────
-
 def dismiss_popups(page):
     """Dismiss cookie consent, GDPR banners, and other popups."""
-    # First try: common cookie consent selectors
     for selector in [
         '#onetrust-accept-btn-handler',
         'button#onetrust-accept-btn-handler',
@@ -353,7 +314,6 @@ def dismiss_popups(page):
         '.modal-close-icon',
         '[class*="banner"] button',
         '[class*="gdpr"] button',
-        # chess.com specific
         'button.cookie-banner-accept',
         '[data-test-element="cookie-banner-accept"]',
     ]:
@@ -367,7 +327,6 @@ def dismiss_popups(page):
         except Exception:
             pass
 
-    # Second try: use JS to find and click any accept/agree button
     clicked = page.evaluate("""() => {
         const buttons = document.querySelectorAll('button, a, div[role="button"]');
         for (const btn of buttons) {
@@ -391,16 +350,13 @@ def dismiss_popups(page):
 
     return False
 
-
 def login_chess_com(page):
     """Login to chess.com via Google OAuth."""
     print("\n🔐 Logging into chess.com via Google...")
 
-    # Check if already logged in WITHOUT navigating away (preserve current page/game)
     current_url = page.url or ''
     in_game = '/game/' in current_url
     
-    # Try to detect login state from current page (sidebar has username if logged in)
     try:
         logged_in = page.evaluate("""() => {
             // Check for username in sidebar or header
@@ -413,7 +369,6 @@ def login_chess_com(page):
     except Exception:
         pass
     
-    # Also check for ClaudeOpus5 text anywhere in sidebar
     try:
         opus = page.locator('text=ClaudeOpus5')
         if opus.count() > 0:
@@ -422,7 +377,6 @@ def login_chess_com(page):
     except Exception:
         pass
 
-    # Not logged in — navigate to home to verify (only if NOT in a game)
     if in_game:
         print("   ⚠️  In a game, skipping login check")
         return True
@@ -431,21 +385,17 @@ def login_chess_com(page):
     time.sleep(4)
     dismiss_popups(page)
 
-    # If we're on /home and NOT redirected to /login, we're logged in
     if 'chess.com' in page.url and '/login' not in page.url.lower():
-        # Double-check: look for "Sign Up" button (present when NOT logged in)
         signup = page.locator('a#menu-cta:has-text("Sign Up")')
         if signup.count() == 0:
             print("   ✅ Already logged in!")
             return True
 
-    # Go to login page
     page.goto(f"{CHESS_COM_URL}/login", timeout=60000)
     time.sleep(4)
     dismiss_popups(page)
     _screenshot(page, "login_page_clean")
 
-    # Click "Log in with Google" button
     google_clicked = False
     for selector in [
         'a:has-text("Log in with Google")',
@@ -472,15 +422,12 @@ def login_chess_com(page):
     time.sleep(5)
     _screenshot(page, "google_oauth_page")
 
-    # Google OAuth page — handle account chooser or email input
     try:
-        # Check if account chooser is shown (Google already has session)
-        # Google uses div, li, or data-email for account items
         account_found = False
         for acc_sel in [
             f'div[data-email="{EMAIL}"]',
             f'li:has-text("{EMAIL}")',
-            f'div:has-text("{EMAIL}"):not(:has(div:has-text("{EMAIL}")))',  # leaf div
+            f'div:has-text("{EMAIL}"):not(:has(div:has-text("{EMAIL}")))',
         ]:
             try:
                 account_item = page.locator(acc_sel)
@@ -494,7 +441,6 @@ def login_chess_com(page):
                 continue
         
         if not account_found:
-            # No account chooser — need to enter email
             print("   📧 Entering Google email...")
             email_input = page.locator('input[type="email"], #identifierId')
             email_input.wait_for(state='visible', timeout=15000)
@@ -503,7 +449,6 @@ def login_chess_com(page):
             page.keyboard.type(EMAIL, delay=30)
             time.sleep(0.5)
 
-            # Click Next
             for sel in ['#identifierNext', 'button:has-text("Next")', 'button:has-text("Далее")']:
                 try:
                     btn = page.locator(sel)
@@ -516,7 +461,6 @@ def login_chess_com(page):
 
             time.sleep(5)
 
-            # Enter password if needed
             pw_input = page.locator('input[type="password"], input[name="Passwd"]')
             if pw_input.count() > 0:
                 print("   🔑 Entering Google password...")
@@ -540,7 +484,6 @@ def login_chess_com(page):
         _screenshot(page, "google_oauth_error")
         time.sleep(3)
 
-    # Wait for redirect back to chess.com
     print("   ⏳ Waiting for redirect back to chess.com...")
     for _ in range(30):
         if 'chess.com' in page.url and '/login' not in page.url.lower():
@@ -553,9 +496,6 @@ def login_chess_com(page):
     print("   ❌ Login failed — check screenshot")
     return False
 
-
-# ── Game Setup ──────────────────────────────────────────────
-
 def navigate_to_minihouse(page):
     """Navigate directly to chess.com/variants/minihouse."""
     print("\n🎮 Navigating to minihouse variant...")
@@ -565,12 +505,10 @@ def navigate_to_minihouse(page):
     dismiss_popups(page)
     _screenshot(page, "variants_page")
 
-    # Dump UI to understand the page
     print("   📋 Scanning page elements...")
     dump_ui(page)
 
     return True
-
 
 def dump_ui(page):
     """Dump all visible interactive elements for debugging."""
@@ -597,12 +535,10 @@ def dump_ui(page):
             print(f"     {el['tag']:10} id='{el.get('id','')}' '{txt}' aria='{aria}' class='{cls}'")
     return elements
 
-
 def setup_game(page):
     """Set up a minihouse game: Casual, 30+30."""
     print("\n⚙️  Setting up minihouse game (Casual 30+30)...")
     
-    # Look for the search/filter for variants
     search = page.locator('input[placeholder*="search" i], input[placeholder*="Search" i], input[type="search"]')
     if search.count() > 0:
         search.first.click()
@@ -611,7 +547,6 @@ def setup_game(page):
         time.sleep(2)
         _screenshot(page, "search_minihouse")
     
-    # Try to find and click minihouse option
     minihouse = page.locator('text=minihouse, text=Minihouse, text=Mini House')
     if minihouse.count() > 0:
         print(f"   Found minihouse option ({minihouse.count()} matches)")
@@ -622,7 +557,6 @@ def setup_game(page):
         print("   ⚠️  'minihouse' not found directly, scanning page...")
         _screenshot(page, "no_minihouse")
     
-    # Look for Customize button (NOT Play!)
     customize = page.locator('button:has-text("Customize"), button:has-text("Custom"), a:has-text("Customize")')
     if customize.count() > 0:
         print("   Clicking 'Customize'...")
@@ -630,7 +564,6 @@ def setup_game(page):
         time.sleep(2)
         _screenshot(page, "customize_page")
     
-    # Set to Casual (unrated)
     rated_toggle = page.locator('[class*="rated" i], input[name*="rated" i], [data-cy*="rated" i]')
     casual_btn = page.locator('button:has-text("Casual"), label:has-text("Casual"), [data-cy*="casual" i]')
     
@@ -639,22 +572,16 @@ def setup_game(page):
         time.sleep(1)
         print("   ✅ Set to Casual")
     
-    # Set time: 30 min + 30 sec
-    # This depends on the UI - might be dropdowns or input fields
     time_input = page.locator('input[name*="time" i], input[aria-label*="time" i], select[name*="time" i]')
     increment_input = page.locator('input[name*="increment" i], input[aria-label*="increment" i]')
     
     _screenshot(page, "game_setup")
     
-    # Try to create the game
     create_btn = page.locator('button:has-text("Create"), button:has-text("Play"), button[type="submit"]')
     if create_btn.count() > 0:
         print("   Found create/play button")
     
     return True
-
-
-# ── Board Reading ───────────────────────────────────────────
 
 def read_board_from_dom(page, our_color=None):
     """Read the current board position from chess.com variants DOM.
@@ -718,9 +645,8 @@ def read_board_from_dom(page, our_color=None):
     
     sq_px = board_data.get('squarePx', 70)
     flipped = (our_color == 'b') if our_color else is_board_flipped(page)
-    board_mid_y = sq_px * 4  # midpoint of 8x8 grid = 280px
+    board_mid_y = sq_px * 4
     
-    # Build a GameState from the board data
     gs = GameState()
     gs.board = [[EMPTY_SQUARE for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
     gs.hands = {'w': {}, 'b': {}}
@@ -729,12 +655,10 @@ def read_board_from_dom(page, our_color=None):
         gs.hands['b'][p_upper] = 0
     gs.king_pos = {'w': None, 'b': None}
     
-    # Place board pieces
     for p_info in board_data['boardPieces']:
         grid_col = round(p_info['px'] / sq_px)
         grid_row = round(p_info['py'] / sq_px)
         
-        # Skip if outside playable area
         if grid_col < GRID_OFFSET or grid_col > BOARD_SIZE or grid_row < GRID_OFFSET or grid_row > BOARD_SIZE:
             continue
         
@@ -754,13 +678,10 @@ def read_board_from_dom(page, our_color=None):
         elif piece_char == 'k':
             gs.king_pos['b'] = (internal_row, internal_col)
     
-    # Parse bank/pocket pieces (negative X, scaled down)
     for bp in board_data['bankPieces']:
         piece_upper = bp['piece'].upper()
         if piece_upper not in "PNBRQ":
             continue
-        # Determine color: Y > midpoint = bottom bank, Y < midpoint = top bank
-        # If not flipped: bottom = white (5), top = black (6) — confirmed by data-color
         if bp['color'] == '5':
             hand_color = 'w'
         else:
@@ -778,7 +699,6 @@ def read_board_from_dom(page, our_color=None):
     print(f"   📋 Board: {piece_count} pieces, flipped={flipped}{hand_str}")
     
     return gs
-
 
 def is_board_flipped(page):
     """Check if we're playing black (board flipped).
@@ -813,16 +733,12 @@ def is_board_flipped(page):
     if not result:
         return False
     
-    # If bottom clock active and it's white's turn → we are white (not flipped)
-    # If bottom clock active and it's black's turn → we are black (flipped)
     if result['bottomActive']:
-        return not result['whitesTurn']  # flipped if it's black's turn
+        return not result['whitesTurn']
     elif result['topActive']:
-        return result['whitesTurn']  # flipped if it's white's turn (opponent is white)
+        return result['whitesTurn']
     
-    # Fallback: both same brightness — assume not flipped
     return False
-
 
 def detect_our_color(page):
     """Detect which color we are playing."""
@@ -833,7 +749,6 @@ def detect_our_color(page):
         print("   ♙ We are playing WHITE")
         return 'w'
 
-
 def get_dom_move_count(page):
     """Get the number of half-moves (plies) from the move list DOM."""
     return page.evaluate("""() => {
@@ -842,13 +757,10 @@ def get_dom_move_count(page):
         return texts.length;
     }""")
 
-
 def detect_turn(page):
     """Detect whose turn it is from move count."""
     mc = get_dom_move_count(page)
-    # Even move count = white's turn, odd = black's turn
     return 'w' if (mc % 2 == 0) else 'b'
-
 
 def is_game_active(page):
     """Check if a game is currently in progress on the variants site."""
@@ -897,7 +809,6 @@ def is_game_active(page):
         return true;
     }""")
 
-
 def read_our_clock(page):
     """Read our (bottom) clock and return remaining time in seconds, or None."""
     try:
@@ -907,7 +818,6 @@ def read_our_clock(page):
         }""")
         if not text:
             return None
-        # Formats: "M:SS", "H:MM:SS", "S.s" (< 10 s)
         parts = text.replace(',', '.').split(':')
         if len(parts) == 3:
             return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
@@ -917,7 +827,6 @@ def read_our_clock(page):
     except Exception as e:
         print(f"   ⚠️  Could not read clock: {e}")
         return None
-
 
 def send_chat_message(page, text):
     """Type and send a message in the in-game chat."""
@@ -941,14 +850,10 @@ def send_chat_message(page, text):
     except Exception as e:
         print(f"   ⚠️  Chat send failed: {e}")
 
-
 def is_our_turn(page, our_color):
     """Check if it's our turn to move."""
     current_turn = detect_turn(page)
     return current_turn == our_color
-
-
-# ── Move Making ─────────────────────────────────────────────
 
 def make_move_on_board(page, move, our_color):
     """Make a move on the chess.com variants board by clicking pixel coordinates.
@@ -968,22 +873,18 @@ def make_move_on_board(page, move, our_color):
     to_alg = coords_to_algebraic(to_row, to_col)
     print(f"   🎯 Moving {from_alg} → {to_alg} (grid {from_grid_col},{from_grid_row} → {to_grid_col},{to_grid_row})")
     
-    # Click source square (center of the grid cell)
     click_grid_square(page, from_grid_col, from_grid_row)
     time.sleep(0.4)
     
-    # Click destination square
     click_grid_square(page, to_grid_col, to_grid_row)
     time.sleep(0.5)
     
-    # Handle promotion if needed
     if promotion:
         handle_promotion(page, promotion, to_grid_col, to_grid_row)
     
     _screenshot(page, "after_move")
     print(f"   ✅ Move made: {format_move_for_print(move)}")
     return True
-
 
 def make_drop_on_board(page, move, our_color):
     """Make a drop move (crazyhouse) by mouse-clicking a bank piece then the target square.
@@ -999,9 +900,8 @@ def make_drop_on_board(page, move, our_color):
     print(f"   🎯 Dropping {piece_code} → {to_alg} (grid {to_grid_col},{to_grid_row})")
     
     our_color_code = '5' if our_color == 'w' else '6'
-    piece_type_upper = piece_code[-1].upper()  # 'wR' -> 'R', 'bN' -> 'N'
+    piece_type_upper = piece_code[-1].upper()
     
-    # Find bank piece bounding rect via JS
     bank_rect = page.evaluate("""(args) => {
         const [pieceType, colorCode] = args;
         const pieces = document.querySelectorAll('.TheBoard-pieces > .piece');
@@ -1021,21 +921,18 @@ def make_drop_on_board(page, move, our_color):
         print(f"   ❌ Could not find bank piece {piece_type_upper} (color {our_color_code})")
         return False
     
-    # Click center of bank piece with real mouse
     bx = bank_rect['x'] + bank_rect['w'] / 2
     by = bank_rect['y'] + bank_rect['h'] / 2
     print(f"   🖱️  Clicking bank piece at ({bx:.0f}, {by:.0f})")
     page.mouse.click(bx, by)
     time.sleep(0.5)
     
-    # Now click the target square on the board
     click_grid_square(page, to_grid_col, to_grid_row)
     time.sleep(0.5)
     
     _screenshot(page, "after_drop")
     print(f"   ✅ Drop made: {piece_code}@{to_alg}")
     return True
-
 
 def click_grid_square(page, grid_col, grid_row):
     """Click the center of a grid square on the variants board.
@@ -1054,15 +951,12 @@ def click_grid_square(page, grid_col, grid_row):
         print("   ❌ Could not find .TheBoard-layers")
         return
     
-    # Dynamic square size from actual board dimensions
     sq = board_rect['width'] / 8.0
     
-    # Calculate pixel position relative to viewport
     px_x = board_rect['left'] + grid_col * sq + sq / 2
     px_y = board_rect['top'] + grid_row * sq + sq / 2
     
     page.mouse.click(px_x, px_y)
-
 
 def handle_promotion(page, promotion_piece, to_grid_col, to_grid_row):
     """Handle pawn promotion dialog by clicking the correct piece in the selector.
@@ -1083,13 +977,11 @@ def handle_promotion(page, promotion_piece, to_grid_col, to_grid_row):
         click_row = to_grid_row
     elif piece_letter == 'N':
         click_col = to_grid_col
-        # N is toward center from destination
         if to_grid_row <= 3:
             click_row = to_grid_row + 1
         else:
             click_row = to_grid_row - 1
     else:
-        # B (bishop) or anything else: click on the destination square itself
         click_col = to_grid_col
         click_row = to_grid_row
     
@@ -1097,10 +989,6 @@ def handle_promotion(page, promotion_piece, to_grid_col, to_grid_row):
     click_grid_square(page, click_col, click_row)
     time.sleep(0.5)
     print(f"   ✅ Promoted to {piece_letter}")
-
-
-# ── AI Decision ─────────────────────────────────────────────
-
 
 def _would_create_move_cycle(our_move_history, candidate_move):
     """Check if playing candidate_move would create a repeated cycle of OUR moves.
@@ -1120,7 +1008,6 @@ def _would_create_move_cycle(our_move_history, candidate_move):
         if extended[-k:] == extended[-2 * k:-k]:
             return True, k
     return False, 0
-
 
 def get_ai_move(gamestate, our_color, our_move_history=None, time_remaining=None):
     """Get the best move from cache or AI engine, avoiding move cycles.
@@ -1148,7 +1035,6 @@ def get_ai_move(gamestate, our_color, our_move_history=None, time_remaining=None
     pos_hash = get_position_hash(gamestate)
     print(f"   🔑 Position hash: {pos_hash[:16]}...")
     
-    # Evaluate position before move for logging
     eval_before = None
     try:
         eval_before = evaluate_position(gamestate)
@@ -1167,7 +1053,6 @@ def get_ai_move(gamestate, our_color, our_move_history=None, time_remaining=None
             print(f"   🔄 Move {format_move_for_print(move)} would create cycle of length {k} — avoiding")
         return would
     
-    # Try cache — use configured depth for actual moves
     search_depth = gamestate.ai_depth if hasattr(gamestate, 'ai_depth') else 8
     cache_key = (pos_hash, search_depth)
     cached = ai_module.move_cache.get(cache_key)
@@ -1184,7 +1069,6 @@ def get_ai_move(gamestate, our_color, our_move_history=None, time_remaining=None
             pass
     
     print("   📊 No cache hit, running AI search...")
-    # Time management: cap thinking when clock is low
     search_time_limit = 90
     alt_time_limit = 15
     if time_remaining is not None and time_remaining < 180:
@@ -1205,7 +1089,6 @@ def get_ai_move(gamestate, our_color, our_move_history=None, time_remaining=None
                                 return alt_move, {**base_info, 'source': 'alt_search', 'score': alt_score, 'depth': max(4, search_depth - 2)}
                 except Exception:
                     pass
-                # Pick any legal move that doesn't create a cycle
                 for m in legal_moves:
                     if not _would_create_move_cycle(our_move_history, m)[0]:
                         print(f"   🎯 Fallback non-cycling: {format_move_for_print(m)}")
@@ -1216,13 +1099,9 @@ def get_ai_move(gamestate, our_color, our_move_history=None, time_remaining=None
     except Exception as e:
         print(f"   ⚠️  AI error: {e}")
     
-    # Fallback: random legal move
     move = random.choice(legal_moves)
     print(f"   🎲 Random fallback: {format_move_for_print(move)}")
     return move, {**base_info, 'source': 'random', 'score': None, 'depth': 0}
-
-
-# ── Game Loop ───────────────────────────────────────────────
 
 def wait_for_game_start(page, timeout=600):
     """Wait until a game starts on the board."""
@@ -1230,7 +1109,6 @@ def wait_for_game_start(page, timeout=600):
     start = time.time()
     
     while time.time() - start < timeout:
-        # Check if game is active by pieces + clocks (no URL dependency)
         if is_game_active(page):
             print("   ✅ Game detected!")
             time.sleep(2)
@@ -1243,13 +1121,11 @@ def wait_for_game_start(page, timeout=600):
     print("   ❌ Timeout waiting for game")
     return False
 
-
 def dismiss_game_over(page):
     """Close the game-over screen and navigate to minihouse lobby."""
     print("   🔄 Dismissing game-over...")
     time.sleep(2)
     
-    # Navigate directly to minihouse lobby — cleanest approach
     try:
         navigate_to_minihouse(page)
         print("   ✅ Back to minihouse lobby")
@@ -1257,7 +1133,6 @@ def dismiss_game_over(page):
     except Exception as e:
         print(f"   ⚠️  Navigation failed: {e}")
     
-    # Fallback: click Exit button
     for selector in [
         'button:has-text("Exit")',
         'button:has-text("Play")',
@@ -1274,7 +1149,6 @@ def dismiss_game_over(page):
     
     return False
 
-
 def _board_to_list(gs):
     """Convert board state to serializable list for logging."""
     board = []
@@ -1282,14 +1156,13 @@ def _board_to_list(gs):
         board.append(list(gs.board[row]))
     return board
 
-
 def _save_game_log(game_log, our_color, result_text, moves_made, result_label):
     """Save detailed game log to game_logs/ directory for ALL games."""
     log_dir = Path(__file__).parent / "game_logs"
     log_dir.mkdir(exist_ok=True)
     
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tag = result_label.lower()  # win/loss/draw
+    tag = result_label.lower()
     filename = f"{tag}_{ts}_{our_color}_{moves_made}moves.json"
     filepath = log_dir / filename
     
@@ -1307,13 +1180,12 @@ def _save_game_log(game_log, our_color, result_text, moves_made, result_label):
     
     print(f"   📝 Game log saved: {filepath}")
 
-
 def play_game(page):
     """Main game loop — read board, decide move, play it."""
     our_color = detect_our_color(page)
     moves_made = 0
-    our_move_history = []   # list of our moves in order, for cycle detection
-    game_log = []           # detailed per-move log for loss analysis
+    our_move_history = []
+    game_log = []
     
     print(f"\n{'═' * 50}")
     print(f"♟️  GAME STARTED! We are {'WHITE ♙' if our_color == 'w' else 'BLACK ♟'}")
@@ -1323,11 +1195,9 @@ def play_game(page):
     send_chat_message(page, "I am sorry guys, I am just a bot =)")
     
     while True:
-        # Check if game is still active
         if not is_game_active(page):
             break
         
-        # Get move count from DOM and determine whose turn
         dom_moves = get_dom_move_count(page)
         current_turn = 'w' if (dom_moves % 2 == 0) else 'b'
         
@@ -1335,7 +1205,6 @@ def play_game(page):
             time.sleep(0.5)
             continue
         
-        # Read the board
         gs = read_board_from_dom(page, our_color)
         if not gs:
             time.sleep(2)
@@ -1347,7 +1216,6 @@ def play_game(page):
         print(f"📍 Move #{moves_made + 1} ({'WHITE' if our_color == 'w' else 'BLACK'}) [DOM plies: {dom_moves}]")
         print_board(gs)
         
-        # Get AI move
         heartbeat("thinking", f"move={moves_made + 1}")
         time_remaining = read_our_clock(page)
         best_move, move_info = get_ai_move(gs, our_color, our_move_history=our_move_history, time_remaining=time_remaining)
@@ -1356,7 +1224,6 @@ def play_game(page):
             time.sleep(2)
             continue
         
-        # Log move details (board state, hands, evaluation, chosen move)
         move_entry = {
             'move_num': moves_made + 1,
             'board': _board_to_list(gs),
@@ -1372,12 +1239,10 @@ def play_game(page):
         }
         game_log.append(move_entry)
         
-        # Re-check game state after AI computation (game may have ended while thinking)
         if not is_game_active(page):
             print("   ⚠️  Game ended while computing, breaking...")
             break
         
-        # Add human-like delay before making the move (shorter for first moves)
         if moves_made < 2:
             think_delay = random.uniform(0.3, 0.8)
         else:
@@ -1385,30 +1250,26 @@ def play_game(page):
         print(f"   ⏱️  Waiting {think_delay:.1f}s...")
         time.sleep(think_delay)
         
-        # Make the move
         success = make_move_on_board(page, best_move, our_color)
         if not success:
             print("   ❌ Move click failed, retrying...")
             time.sleep(1)
             continue
         
-        # Wait for our move to register in DOM (move count should increase)
         move_registered = False
-        for _ in range(20):  # up to 10 seconds
+        for _ in range(20):
             time.sleep(0.5)
             new_dom_moves = get_dom_move_count(page)
             if new_dom_moves > dom_moves:
                 move_registered = True
                 print(f"   ✅ Move registered (plies: {dom_moves} → {new_dom_moves})")
                 break
-            # Also check if game ended
             if not is_game_active(page):
                 move_registered = True
                 break
         
         if not move_registered:
             print(f"   ⚠️  Move may not have registered (plies still {dom_moves}), retrying...")
-            # Click an empty area to deselect, then retry
             try:
                 click_grid_square(page, 4, 4)
                 time.sleep(0.3)
@@ -1419,13 +1280,11 @@ def play_game(page):
         moves_made += 1
         heartbeat("moved", f"move={moves_made}")
         
-        # Record played move for cycle detection
         our_move_history.append(best_move)
         
-        # Wait for opponent's move (or game end)
         print(f"   ⏳ Waiting for opponent...")
         wait_ticks = 0
-        for _ in range(3600):  # up to 30 min
+        for _ in range(3600):
             time.sleep(1)
             wait_ticks += 1
             if wait_ticks % 60 == 0:
@@ -1438,7 +1297,6 @@ def play_game(page):
                 print(f"   ♟️  Opponent moved (plies: {opp_moves})")
                 break
     
-    # Detect game result from DOM
     result_text = "unknown"
     try:
         result_text = page.evaluate("""() => {
@@ -1470,9 +1328,7 @@ def play_game(page):
     print(f"{'═' * 50}")
     _screenshot(page, "game_over")
     
-    # Determine game result
     result_lower = result_text.lower()
-    # Check score-based result (most reliable)
     if '1-0' in result_text:
         is_win = (our_color == 'w')
         is_loss = (our_color == 'b')
@@ -1483,7 +1339,6 @@ def play_game(page):
         is_win = False
         is_loss = False
     else:
-        # Fallback: check who resigned/won
         is_win = ('you won' in result_lower
                   or (our_color == 'b' and 'white resigned' in result_lower)
                   or (our_color == 'w' and 'black resigned' in result_lower))
@@ -1498,20 +1353,16 @@ def play_game(page):
     result_label = "WIN" if is_win else ("LOSS" if is_loss else "DRAW")
     print(f"   📊 Result: {result_label}")
     
-    # Save game log for ALL games (not just losses)
     _save_game_log(game_log, our_color, result_text, moves_made, result_label)
     
-    # Flush this game's searches to the opening book
     try:
         ai_module.save_move_cache_to_db()
         print(f"   💾 Book now holds {ai_module.book_size()} positions (book.db)")
     except Exception as e:
         print(f"   ⚠️  Book save failed: {e}")
     
-    # Dismiss game-over modal if present
     time.sleep(2)
     dismiss_game_over(page)
-
 
 def print_board(gs):
     """Print the board state to console."""
@@ -1527,9 +1378,6 @@ def print_board(gs):
         print(f"  White hand: {w_hand}")
     if b_hand:
         print(f"  Black hand: {b_hand}")
-
-
-# ── Main ────────────────────────────────────────────────────
 
 def create_minihouse_game(page, rated=False):
     """Navigate to minihouse page → set time 30+30 → Casual/Rated → Play!
@@ -1547,13 +1395,11 @@ def create_minihouse_game(page, rated=False):
     mode_str = "Rated" if rated else "Casual"
     print(f"\n🎮 Creating minihouse game ({mode_str} 30+30)...")
 
-    # Step 1: Navigate to minihouse page
     page.goto(f"{CHESS_COM_URL}/variants/minihouse", timeout=60000)
     time.sleep(5)
     dismiss_popups(page)
     _screenshot(page, "01_minihouse_page")
 
-    # Step 2: Set Rated/Casual toggle
     want_rated = rated
     print(f"   🏷️  Setting to {'Rated' if want_rated else 'Casual (unrated)'}...")
     try:
@@ -1593,7 +1439,6 @@ def create_minihouse_game(page, rated=False):
 
     _screenshot(page, "02_casual")
 
-    # Step 3: Check if time is already 30|30
     current_time_btn = page.locator('button.ui_v5-button-component:has-text("|"), button.ui_v5-button-component:has-text("min"), button.ui_v5-button-component:has-text("sec")')
     current_time_text = ""
     if current_time_btn.count() > 0:
@@ -1603,20 +1448,17 @@ def create_minihouse_game(page, rated=False):
     if current_time_text == "30 | 30":
         print("   ✅ Time already set to 30+30")
     else:
-        # Step 4: Click time button to open dropdown
         print("   ⏱️  Setting time control to 30+30...")
         if current_time_btn.count() > 0:
             current_time_btn.first.click()
             time.sleep(1)
 
-            # Step 5: Click "More" button for custom time
             more_btn = page.locator('button.ui_v5-button-component:has-text("More")')
             if more_btn.count() > 0:
                 more_btn.first.click()
                 time.sleep(1)
                 print("   ✅ Expanded 'More' time options")
 
-            # Step 6: Set Initial Time via JS (most reliable)
             page.evaluate("""() => {
                 const selects = document.querySelectorAll('select.ui_v5-select-component');
                 for (const sel of selects) {
@@ -1633,7 +1475,6 @@ def create_minihouse_game(page, rated=False):
             time.sleep(0.5)
             print("   ✅ Set Initial Time to 30 min via JS")
 
-            # Step 7: Set Increment via JS
             page.evaluate("""() => {
                 const selects = document.querySelectorAll('select.ui_v5-select-component');
                 for (const sel of selects) {
@@ -1654,7 +1495,6 @@ def create_minihouse_game(page, rated=False):
 
     _screenshot(page, "03_time_set")
 
-    # Step 8: Verify rated/casual is correct (setting time may have reset it)
     is_rated_final = page.evaluate("() => { const el = document.getElementById('isRatedToggle'); return el ? el.checked : null; }")
     if is_rated_final != want_rated and is_rated_final is not None:
         print(f"   ⚠️  Toggle got reset! Fixing to {'Rated' if want_rated else 'Casual'}...")
@@ -1673,7 +1513,6 @@ def create_minihouse_game(page, rated=False):
 
     _screenshot(page, "04_final_check")
 
-    # Step 9: Click "Play!" to start seeking
     print("   🚀 Starting game search...")
     clicked = False
     try:
@@ -1707,7 +1546,6 @@ def create_minihouse_game(page, rated=False):
     print("   ✅ Game creation flow complete")
     return True
 
-
 def auto_loop(page, max_games=None):
     """Loop: create game → wait → play → repeat. Stops after max_games if set."""
     game_num = 0
@@ -1722,7 +1560,6 @@ def auto_loop(page, max_games=None):
         print(f"║  GAME #{game_num:03d}                                        ║")
         print(f"{'╚' + '═' * 48 + '╝'}")
 
-        # If we're still on a game page, navigate to minihouse lobby
         current_url = page.url or ''
         if '/game/' in current_url:
             print("   📍 Still on game page, navigating to lobby...")
@@ -1733,31 +1570,25 @@ def auto_loop(page, max_games=None):
                 time.sleep(5)
                 continue
 
-        # Create game
         if not create_minihouse_game(page, rated=True):
             print("   ❌ Failed to create game. Retrying in 30s...")
             time.sleep(30)
             continue
 
-        # Wait for opponent
         if not wait_for_game_start(page, timeout=600):
             print("   ❌ No opponent found. Retrying...")
             continue
 
-        # Play the game
         play_game(page)
 
-        # Check for stop flag
         stop_flag = Path(__file__).parent / ".stop_after_game"
         if stop_flag.exists():
             print("\n🛑 Stop flag detected! Stopping auto-loop.")
             stop_flag.unlink()
             return
 
-        # Small pause before next game
         print("\n   ⏳ Waiting 5s before next game...")
         time.sleep(5)
-
 
 def run_auto_session(max_games=None):
     """Single auto-session: connect → detect state → play. Returns on crash."""
@@ -1778,16 +1609,13 @@ def run_auto_session(max_games=None):
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         setup_stealth(ctx, page)
 
-        # Ensure page is on chess.com (not about:blank)
         if not page.url or 'chess.com' not in page.url:
             page.goto("https://www.chess.com/variants/minihouse", wait_until="domcontentloaded", timeout=30000)
             time.sleep(2)
 
-        # Login (without navigating away from game)
         if not login_chess_com(page):
             print("⚠️  Login check inconclusive, continuing anyway...")
 
-        # Detect current state
         current_url = page.url or ''
         in_game = '/game/' in current_url
         if not in_game:
@@ -1804,9 +1632,7 @@ def run_auto_session(max_games=None):
         else:
             print(f"\n🆕 No active game. URL: {current_url}")
 
-        # After game (or no game) → auto-loop
         auto_loop(page, max_games=max_games)
-
 
 def main():
     """Entry point — supports --auto for fully autonomous mode."""
@@ -1823,7 +1649,6 @@ def main():
     print("╚══════════════════════════════════════════════╝")
 
     if auto_mode:
-        # Fully autonomous with auto-restart
         restart_count = 0
         while True:
             restart_count += 1
@@ -1846,7 +1671,6 @@ def main():
                     break
         return
 
-    # --- Interactive CLI mode (original) ---
     print("\n📦 Loading move cache...")
     setup_db()
     load_move_cache_from_db()
@@ -1974,7 +1798,6 @@ def main():
         print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
-
 
 if __name__ == "__main__":
     main()

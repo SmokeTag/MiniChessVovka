@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Piece codes, promotion sets and move directions shared by the Python rules layer.
 
 Pure data: the vector drawing primitives that used to live here (and the pygame and
@@ -7,7 +6,6 @@ are gone too; the numbers that decide moves are the consts at the top of
 engine_rs/src/eval.rs, and a second set here was only ever misleading.
 """
 
-# --- Piece Representation ---
 EMPTY_SQUARE = '.'
 PAWN = ['P', 'p']
 KNIGHT = ['N', 'n']
@@ -19,13 +17,11 @@ KING = ['K', 'k']
 PROMOTION_PIECES_WHITE_STR = ['R', 'N', 'B']
 PROMOTION_PIECES_BLACK_STR = ['r', 'n', 'b']
 
-# Mapping of pieces to Unicode symbols (for text rendering, if needed)
 PIECE_TO_SYMBOL = {
     'p': '♟', 'n': '♞', 'b': '♝', 'r': '♜', 'k': '♚',
     'P': '♙', 'N': '♘', 'B': '♗', 'R': '♖', 'K': '♔'
 }
 
-# --- Move Directions ---
 KNIGHT_MOVES = [(1, 2), (1, -2), (-1, 2), (-1, -2),
                 (2, 1), (2, -1), (-2, 1), (-2, -1)]
 DIAGONAL_MOVES = [(1, 1), (1, -1), (-1, 1), (-1, -1)]

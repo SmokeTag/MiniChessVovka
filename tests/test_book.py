@@ -25,15 +25,9 @@ from tests.cache_isolation import IsolatedCacheDB
 
 DB_PATH = "book.db"
 
-# White mates in one: Qb1-b5 is covered by the king on c4, so Black has no reply. Used to
-# check that the mate break -- which stops iterative deepening early -- files the depth it
-# reached rather than the depth it was asked for.
 MATE_IN_ONE = "k5/6/2K3/6/6/1Q4[] w"
 
-# Black is in check from the rook on d6 with every flight square but a5 covered, so there
-# is exactly one legal move.
 ONLY_ONE_LEGAL_MOVE = "k2R2/6/1R4/6/6/5K[] b"
-
 
 def fresh_book():
     """Start a test from an empty in-memory book.
@@ -45,12 +39,10 @@ def fresh_book():
     ai.setup_db()
     ai.load_move_cache_from_db()
 
-
 def initial_state():
     gs = rs.GameState()
     gs.setup_initial_board()
     return gs
-
 
 def rows(query, *params):
     conn = sqlite3.connect(DB_PATH)
@@ -58,7 +50,6 @@ def rows(query, *params):
         return conn.execute(query, params).fetchall()
     finally:
         conn.close()
-
 
 class TestWhatOneSearchWrites(IsolatedCacheDB):
     def test_one_row_per_rank_and_one_position_and_nothing_else(self):
@@ -97,7 +88,6 @@ class TestWhatOneSearchWrites(IsolatedCacheDB):
         self.assertEqual(rows("SELECT count(*) FROM book_move")[0][0], 0)
         self.assertEqual(rows("SELECT count(*) FROM position")[0][0], 0)
 
-
 class TestStoredDepthIsTheCompletedDepth(IsolatedCacheDB):
     def test_mate_break_records_the_depth_it_reached(self):
         fresh_book()
@@ -124,7 +114,6 @@ class TestStoredDepthIsTheCompletedDepth(IsolatedCacheDB):
                 "a search cut short by its time limit must not file its answer as deep",
             )
 
-
 class TestProbe(IsolatedCacheDB):
     def test_shallower_entries_are_rejected_and_deeper_ones_accepted(self):
         fresh_book()
@@ -134,13 +123,10 @@ class TestProbe(IsolatedCacheDB):
         ai.save_move_cache_to_db()
         self.assertEqual(rows("SELECT depth FROM book_move")[0][0], 4)
 
-        # Asking for more than the book holds has to re-search, which overwrites the row.
         rs.find_best_move(initial_state(), 8, 1, None, False)
         ai.save_move_cache_to_db()
         self.assertEqual(rows("SELECT depth FROM book_move")[0][0], 8)
 
-        # Asking for less is answered from the deeper entry: same evidence, and more of
-        # it. The row is left alone.
         rs.find_best_move(initial_state(), 3, 1, None, False)
         ai.save_move_cache_to_db()
         self.assertEqual(rows("SELECT depth FROM book_move")[0][0], 8)
@@ -184,7 +170,6 @@ class TestProbe(IsolatedCacheDB):
 
         ranked = rs.find_best_move(initial_state(), 6, 2, None, False)
         self.assertEqual(len(ranked), 2)
-
 
 class TestMultiPV(IsolatedCacheDB):
     def assert_ranked_for_white(self, ranked, n):
@@ -243,7 +228,6 @@ class TestMultiPV(IsolatedCacheDB):
         self.assertEqual(len(ranked), 2)
         self.assertNotEqual(str(ranked[0][0]), str(ranked[1][0]))
 
-
 class TestPositionTable(IsolatedCacheDB):
     def test_every_stored_fen_round_trips_and_hashes_back(self):
         fresh_book()
@@ -278,13 +262,11 @@ class TestPositionTable(IsolatedCacheDB):
         conn.commit()
         conn.close()
 
-        # Re-search the same position: it arrives claiming ply 0 again, which is earlier.
         ai.load_move_cache_from_db()
         rs.find_best_move(initial_state(), 6, 1, None, False)
         ai.save_move_cache_to_db()
         self.assertEqual(rows("SELECT ply FROM position")[0][0], 0)
 
-        # And a later sighting of the same position must not push the minimum back up.
         conn = sqlite3.connect(DB_PATH)
         conn.execute("UPDATE position SET ply = 0 WHERE hash = ?", (pos_hash,))
         conn.commit()
@@ -296,10 +278,8 @@ class TestPositionTable(IsolatedCacheDB):
         ai.save_move_cache_to_db()
         self.assertEqual(rows("SELECT ply FROM position")[0][0], 0)
 
-
 if __name__ == '__main__':
     unittest.main()
-
 
 class TestAnalysisMergeKeepsTheBetterEntry(IsolatedCacheDB):
     """What `load_analysis_from_db` does when both stores hold the same position.

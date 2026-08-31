@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Loader for bench/positions.json.
 
@@ -26,7 +25,6 @@ POSITIONS_JSON = os.path.join(BENCH_DIR, "positions.json")
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-
 def decode_move(m):
     """JSON list -> internal move tuple."""
     if isinstance(m, (list, tuple)) and len(m) == 3 and m[0] == "drop":
@@ -34,13 +32,11 @@ def decode_move(m):
     (r1, f1), (r2, f2), promo = m[0], m[1], m[2]
     return ((r1, f1), (r2, f2), promo)
 
-
 def encode_move(m):
     """Internal move tuple -> JSON-safe list."""
     if m[0] == "drop":
         return ["drop", m[1], [m[2][0], m[2][1]]]
     return [[m[0][0], m[0][1]], [m[1][0], m[1][1]], m[2]]
-
 
 def load_positions(path=POSITIONS_JSON):
     """Return {name: position_dict} from the positions file."""
@@ -48,13 +44,11 @@ def load_positions(path=POSITIONS_JSON):
         data = json.load(fh)
     return {p["name"]: p for p in data["positions"]}
 
-
 def load_positions_list(path=POSITIONS_JSON):
     """Return the positions in file order (opening -> endgame)."""
     with open(path, "r") as fh:
         data = json.load(fh)
     return data["positions"]
-
 
 def build_gamestate(position):
     """
@@ -75,8 +69,6 @@ def build_gamestate(position):
                 % (position["name"], idx, move)
             )
         if gs.needs_promotion_choice:
-            # Stored positions record the promotion piece alongside the ply so
-            # the replay is deterministic.
             promo = position.get("promotions", {}).get(str(idx))
             if promo is None:
                 promo = "R" if gs.current_turn == "w" else "r"

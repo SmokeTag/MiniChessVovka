@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Pygame front end for Mini Crazyhouse 6×6.
 
 The loop is: read events into intents, apply intents, redraw only if something
@@ -31,11 +30,10 @@ from pieces import EMPTY_SQUARE
 from thread_utils import AIThread, HintPool
 from utils import coords_to_algebraic, format_move_for_print, format_score, get_piece_color
 
-DRAG_THRESHOLD = 5          # pixels before a press becomes a drag
-FLASH_DURATION = 0.45       # seconds an illegal-click flash stays on screen
+DRAG_THRESHOLD = 5
+FLASH_DURATION = 0.45
 TOAST_DURATION = 3.5
 PIECE_NAMES = {'P': 'Pawn', 'N': 'Knight', 'B': 'Bishop', 'R': 'Rook', 'Q': 'Queen'}
-
 
 class BoardView:
     """Flat snapshot handed to the renderer — live position or a historical one."""
@@ -52,7 +50,6 @@ class BoardView:
         self.result_detail = result_detail
         self.result_color = result_color
 
-
 class UIState:
     """Everything the renderer needs that is not game state."""
 
@@ -68,16 +65,16 @@ class UIState:
         self.flashes = []
         self.show_hint = bool(prefs['show_hint'])
         self.hint_lines = prefs['hint_lines']
-        self.hint_ranked = []        # [(move, white_relative_score)], best-first
+        self.hint_ranked = []
         self.hint_pending = False
         self.hint_depth = prefs['ai_depth']
         self.hint_started = 0.0
         self.hint_workers = prefs['hint_workers']
-        self.hint_active = 0         # hint searches in flight, this one included
-        self.score = None            # white-relative; None until something computes one
+        self.hint_active = 0
+        self.score = None
         self.score_source = "—"
-        self.can_save_book = False   # is there a searched entry for this position?
-        self.in_book = False         # does this position already have a book_move row?
+        self.can_save_book = False
+        self.in_book = False
         self.thinking = False
         self.think_started = 0.0
         self.think_depth = prefs['ai_depth']
@@ -93,8 +90,6 @@ class UIState:
         self.toast = None
         self.game_over = False
         self.needs_promotion = False
-
-    # --- derived values the renderer reads ---
 
     @property
     def browsing(self):
@@ -215,7 +210,6 @@ class UIState:
                 "+ − depth · [ ] lines · , . cores · wheel over any",
                 PANEL_COLORS['text_faint'])
 
-
 class Game:
     def __init__(self):
         self.prefs = settings.load()
@@ -230,13 +224,9 @@ class Game:
 
         self.ai_thread = None
         self.hints = HintPool(self.ui.hint_workers)
-        self.position_key = None     # FEN of the position on the board; recomputed on
-                                     # every `invalidate`, which is the documented seam
-                                     # for "the position changed"
-        self.hint_shown_key = None   # the key whose answer is currently on screen
-        self.generation = 0          # bumped whenever the position the *engine* was
-                                     # asked about stops being the current one. Hints
-                                     # need no such counter — see `HintPool`.
+        self.position_key = None
+        self.hint_shown_key = None
+        self.generation = 0
         self.last_move_at = 0.0
         self.check_cache = {}
         self.analysis_loaded = 0
@@ -247,8 +237,6 @@ class Game:
         self.layout = None
         self.hits = {'buttons': {}, 'hand': {}, 'promotion': {}, 'movelist': {},
                      'wheel': {}}
-
-    # --- setup -------------------------------------------------------------
 
     def _default_orientation(self):
         """Face the board toward whichever side the human plays."""
@@ -301,8 +289,6 @@ class Game:
         })
         settings.save(self.prefs)
 
-    # --- state helpers -----------------------------------------------------
-
     def is_ai_turn(self):
         return ((self.gs.current_turn == 'w' and self.ui.ai_white) or
                 (self.gs.current_turn == 'b' and self.ui.ai_black))
@@ -323,8 +309,6 @@ class Game:
             self.ui.hint_ranked = []
             self.ui.hint_pending = False
             self.hint_shown_key = None
-        # The score described the position we just left. Fall back to the static
-        # evaluation of the new one rather than leaving a stale search number up.
         self.refresh_static_score()
         self.refresh_book_state()
         self.check_cache.clear()
@@ -342,7 +326,6 @@ class Game:
         try:
             self.position_key = ai.to_fen(self.gs)
         except Exception as exc:
-            # Without a key the pool simply does not run; the GUI stays usable.
             print(f"[hint] could not name the position: {exc}")
             self.position_key = None
 
@@ -371,7 +354,7 @@ class Game:
         try:
             self.ui.score = int(ai.evaluate_position(self.gs))
             self.ui.score_source = "static"
-        except Exception as exc:                        # never let the readout crash a frame
+        except Exception as exc:
             print(f"[eval] static evaluation failed: {exc}")
             self.ui.score, self.ui.score_source = None, "—"
 
@@ -457,8 +440,6 @@ class Game:
         self.ui.ai_white = self.gs.white_ai_enabled
         self.ui.ai_black = self.gs.black_ai_enabled
 
-    # --- rendering data ----------------------------------------------------
-
     def check_square_for(self, board, king_pos, turn):
         """King square to flag as in check, or None.
 
@@ -511,8 +492,6 @@ class Game:
             needs_promotion=self.gs.needs_promotion_choice,
             result_title=title, result_detail=detail, result_color=color)
 
-    # --- move application --------------------------------------------------
-
     @staticmethod
     def notation(move):
         """Move list text. Drops read `N@a6`, not utils' `WN@a6`."""
@@ -529,7 +508,7 @@ class Game:
             text += "+"
         self.ui.history.append(text)
         self.ui.view_ply = self.ui.live_ply = max(0, len(self.gs.saved_states) - 1)
-        self.ui.movelist_scroll = 10 ** 6      # clamped on draw: pin to the newest
+        self.ui.movelist_scroll = 10 ** 6
 
     def legal_moves_between(self, start, target):
         return [m for m in self.gs.get_all_legal_moves()
@@ -542,7 +521,6 @@ class Game:
             return False
 
         if self.gs.needs_promotion_choice:
-            # Leave the modal up; the position is not committed until it is answered.
             self.invalidate()
             self.sync_ui()
             return True
@@ -585,9 +563,6 @@ class Game:
 
         side = "White" if self.gs.current_turn == 'w' else "Black"
         if self.ui.thinking:
-            # The in-flight search is now answering a question about a position
-            # that no longer exists. invalidate() bumped the generation, so its
-            # result will be dropped when it lands.
             self.ai_thread = None
             self.ui.thinking = False
             self.toast(f"Took back a move — {side} to play.\nThe engine's search was abandoned.",
@@ -601,9 +576,6 @@ class Game:
         self.gs.black_ai_enabled = self.ui.ai_black
         self.gs.ai_depth = self.ui.depth
         self.ai_thread = None
-        # Answers from the game just abandoned can never be asked for again, and the
-        # searches still in flight belong to it too — but those cannot be stopped, so
-        # they are left to finish and fill the analysis cache.
         self.hints.forget_results()
         self.hint_shown_key = None
         self.ui.thinking = False
@@ -617,14 +589,10 @@ class Game:
         self.sync_ui()
         self.toast("New game.", PANEL_COLORS['good'])
 
-    # --- engine ------------------------------------------------------------
-
     def start_ai_if_needed(self):
         if (self.ui.thinking or self.ai_thread or self.gs.needs_promotion_choice
                 or self.game_finished() or not self.is_ai_turn()):
             return
-        # Keep the previous move on screen briefly so an engine-vs-engine game is
-        # watchable. This never blocks input, unlike the old post-search stall.
         if time.time() - self.last_move_at < MIN_MOVE_DISPLAY:
             self.dirty = True
             return
@@ -674,18 +642,9 @@ class Game:
         self.record_move(self.gs.last_move)
         self.last_move_at = time.time()
         self.invalidate()
-        # After invalidate, which reset the readout to a static evaluation: the score
-        # the search returned is the value of the line it just played, so it still
-        # describes the position on the board. Only for the engine's own move —
-        # a random fallback or a rejected move has no search behind it.
         if move is thread.best_move:
             self.set_search_score(thread.score, thread.depth)
         self.sync_ui()
-        # Deliberately no book write here. This used to flush the whole DIRTY_KEYS
-        # queue on every engine move, which meant one AI move filed every position the
-        # session had searched since the last one — hints included, exploration
-        # included. The book is a curated repertoire, so a row goes in only when the
-        # user asks for it: see `save_to_book`.
 
     def start_hint_if_needed(self):
         """Ask the pool for the position on screen. Cheap enough to call every frame.
@@ -702,12 +661,7 @@ class Game:
         key = self.hint_key()
         if key is None:
             return
-        # The selected depth, not a private cap: with both AI toggles off this is the
-        # only search the app runs, so clamping it here is clamping the depth control.
         if self.hints.submit(key, self.gs, self.ui.depth, self.ui.hint_lines):
-            # Mark it pending here rather than waiting for the next `poll_hint`, or the
-            # frame drawn in between shows the idle status for a search that has already
-            # started — the spinner would come up one frame late.
             self.ui.hint_pending = True
             self.ui.hint_depth = self.ui.depth
             self.ui.hint_started = self.hints.started_at(key)
@@ -724,14 +678,9 @@ class Game:
         """
         landed = self.hints.reap()
         if landed:
-            # Every finished search added rows to the in-memory analysis cache, whoever
-            # it was for. One flush covers all of them.
             self.flush_analysis()
             self.refresh_book_state()
 
-        # A cached answer must not reappear once the question is withdrawn: hints off,
-        # or the engine to move, means nothing goes on screen even though the pool may
-        # still hold — and still be computing — a perfectly good answer.
         if not self.ui.show_hint or self.is_ai_turn():
             if self.hint_shown_key is not None or self.ui.hint_pending:
                 self.ui.hint_ranked = []
@@ -740,8 +689,6 @@ class Game:
                 self.dirty = True
             active = self.hints.active()
             if active != self.ui.hint_active:
-                # The core count in the panel is still live even with hints off: the
-                # searches already running drain, and the note has to follow them down.
                 self.ui.hint_active = active
                 self.dirty = True
             return
@@ -767,17 +714,11 @@ class Game:
             return
         if key == self.hint_shown_key:
             return
-        # Newly on screen: either this search just landed, or the board walked back into
-        # a position something already answered.
         self.ui.hint_ranked = list(ranked)
         self.hint_shown_key = key
         self.dirty = True
-        # The hint searched the position on the board, so rank 1's score is a better
-        # answer than the static evaluation currently on screen.
         if self.ui.hint_ranked:
             self.set_search_score(self.ui.hint_ranked[0][1], key[1])
-
-    # --- selection ---------------------------------------------------------
 
     def select_square(self, square):
         piece = self.gs.board[square[0]][square[1]]
@@ -816,11 +757,9 @@ class Game:
         if had:
             self.dirty = True
 
-    # --- intents -----------------------------------------------------------
-
     def go_to_ply(self, ply):
         if self.gs.needs_promotion_choice:
-            return          # the promotion must be answered before anything else
+            return
         ply = max(0, min(self.ui.live_ply, ply))
         if ply != self.ui.view_ply:
             self.ui.view_ply = ply
@@ -839,14 +778,7 @@ class Game:
             self.toast(f"Depth {depth} is the {edge} setting.", PANEL_COLORS['warn'])
             return
         self.ui.depth = self.gs.ai_depth = depth
-        # A hint computed at the old depth is no longer the answer to the question the
-        # depth control now asks. `hint_key` folds the depth in, so the hint side needs
-        # no more than taking it off screen.
         self.drop_hint()
-        # The engine's own move does need the counter: a search already in flight would
-        # otherwise land and be played at the depth the user just moved away from. This
-        # used to happen inside `drop_hint`, which is why it is spelled out here now —
-        # the other two callers of `drop_hint` change nothing about the engine's move.
         self.generation += 1
         self.toast(f"Engine depth {depth} — {settings.DEPTH_LABELS.get(depth, '')}.",
                    PANEL_COLORS['text_dim'])
@@ -896,9 +828,6 @@ class Game:
                        PANEL_COLORS['warn'])
             return
         note = settings.hint_worker_label(workers)
-        # Each concurrent search pre-allocates its own transposition table, so the cost
-        # of a high setting is memory rather than anything subtle. Name it: it is the
-        # one consequence the window cannot otherwise show.
         cost = f"about {workers * settings.HINT_WORKER_MB / 1024:.1f} GB" if (
             workers * settings.HINT_WORKER_MB >= 1024
         ) else f"about {workers * settings.HINT_WORKER_MB} MB"
@@ -935,7 +864,7 @@ class Game:
         self.toast(f"{side} is now played by the {'engine' if state else 'human'}.",
                    PANEL_COLORS['text_dim'])
         if not state and self.ui.thinking and self.gs.current_turn == color:
-            self.ai_thread = None       # generation bump below drops the result
+            self.ai_thread = None
             self.ui.thinking = False
         self.invalidate()
         self.sync_ui()
@@ -993,11 +922,9 @@ class Game:
         if self.ui.selected_square:
             start = self.ui.selected_square
             if square == start:
-                return                       # keep the selection; may become a drag
+                return
             options = self.legal_moves_between(start, square)
             if options:
-                # Several entries differ only by promotion piece: submit the move
-                # without one so the picker opens instead of silently choosing.
                 move = (start, square, None) if len(options) > 1 or options[0][2] else options[0]
                 self.play_move(move)
                 return
@@ -1042,16 +969,12 @@ class Game:
             return True
         return False
 
-    # --- events ------------------------------------------------------------
-
     def handle_mouse_down(self, pos, button):
         self.dirty = True
 
         if button in (4, 5):
             return
 
-        # Promotion is modal: only its own buttons exist this frame (draw_frame
-        # clears every other hit region while the picker is up).
         if self.hits['promotion']:
             for char, rect in self.hits['promotion'].items():
                 if rect.collidepoint(pos):
@@ -1118,7 +1041,7 @@ class Game:
                 self.clear_selection()
             return
         if square == drag['origin']:
-            return                              # dropped back where it started
+            return
         self.try_board_action(square)
 
     def handle_key(self, event):
@@ -1146,7 +1069,7 @@ class Game:
         elif key in (pygame.K_u, pygame.K_BACKSPACE) or (ctrl and key == pygame.K_z):
             self.undo_one_ply()
         elif ctrl and key == pygame.K_n:
-            self.new_game()          # bare N is unbound: a new game is unrecoverable
+            self.new_game()
         elif key == pygame.K_f:
             self.handle_button('toggle_flip')
         elif key == pygame.K_h:
@@ -1191,7 +1114,7 @@ class Game:
                 if self.ui.drag and self.ui.drag['active']:
                     self.dirty = True
                 elif self.layout.panel.collidepoint(event.pos):
-                    self.dirty = True       # hover feedback on the controls
+                    self.dirty = True
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 self.ui.mouse_pos = event.pos
                 if event.button in (4, 5):
@@ -1209,8 +1132,6 @@ class Game:
             elif event.type == pygame.KEYDOWN:
                 self.handle_key(event)
 
-    # --- loop --------------------------------------------------------------
-
     def expire_transients(self):
         now = time.time()
         remaining = [(sq, until) for sq, until in self.ui.flashes if until > now]
@@ -1224,7 +1145,6 @@ class Game:
     def render(self):
         now = time.time()
         self.ui.anim_phase = now
-        # Renderer wants (square, strength) so a flash can fade out.
         flashes = self.ui.flashes
         self.ui.flashes = [(sq, max(0.0, (until - now) / FLASH_DURATION)) for sq, until in flashes]
         try:
@@ -1235,8 +1155,6 @@ class Game:
 
     def run(self):
         ai.load_move_cache_from_db()
-        # Opt-in, and only here: loading the analysis cache means the engine plays from
-        # it too, which is right for a study tool and wrong for the book builder.
         try:
             self.analysis_loaded = ai.load_analysis_from_db()
         except Exception as exc:
@@ -1275,12 +1193,10 @@ class Game:
         self.save_prefs()
         pygame.quit()
 
-
 def main():
     pygame.init()
     Game().run()
     sys.exit()
-
 
 if __name__ == "__main__":
     main()

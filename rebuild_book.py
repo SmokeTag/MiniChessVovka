@@ -33,7 +33,6 @@ sys.path.insert(0, REPO_ROOT)
 
 DB_PATH = "book.db"
 
-
 def describe():
     """What the file on disk currently holds. Returns None if there is nothing to lose."""
     if not os.path.exists(DB_PATH):
@@ -51,17 +50,14 @@ def describe():
             try:
                 cached = conn.execute("SELECT count(*) FROM analysis_move").fetchone()[0]
             except sqlite3.OperationalError:
-                cached = 0      # book.db predates the analysis pair
+                cached = 0
         except sqlite3.OperationalError:
-            # A foreign schema is exactly the case this script exists for; it need not
-            # have tables we can count.
             return {"version": version, "positions": None, "moves": None, "depths": [],
                     "cached": 0}
         return {"version": version, "positions": positions, "moves": moves,
                 "depths": depths, "cached": cached}
     finally:
         conn.close()
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -123,7 +119,6 @@ def main():
         ai.rebuild_book()
         print("Rebuilt: %s is empty at schema version %s." % (DB_PATH, rs.SCHEMA_VERSION))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

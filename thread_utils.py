@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Background search threads.
 
 Both threads copy the position before they start: the GUI keeps mutating the live
@@ -21,7 +20,6 @@ import traceback
 from ai import find_best_move, find_best_move_with_score
 from utils import format_move_for_print
 
-
 class AIThread(threading.Thread):
     """The engine's own move. Single-PV, so the score costs nothing extra."""
 
@@ -30,7 +28,7 @@ class AIThread(threading.Thread):
         self.gamestate = copy.deepcopy(gamestate)
         self.depth = depth
         self.best_move = None
-        self.score = None          # white-relative; None for a forced move
+        self.score = None
         self.done = False
         self.name = f"AIThread-{gamestate.current_turn}-D{depth:.0f}-Move-{time.time():.0f}"
         self.daemon = True
@@ -48,7 +46,6 @@ class AIThread(threading.Thread):
         finally:
             self.done = True
 
-
 class HintThread(threading.Thread):
     """The human's hint: the top `lines` moves, ranked, with scores.
 
@@ -62,7 +59,7 @@ class HintThread(threading.Thread):
         self.gamestate = copy.deepcopy(gamestate)
         self.depth = depth
         self.lines = max(1, int(lines))
-        self.ranked = []           # [(move, white_relative_score)], best-first
+        self.ranked = []
         self.done = False
         self.started_at = time.time()
         self.daemon = True
@@ -80,9 +77,6 @@ class HintThread(threading.Thread):
             else:
                 ranked = list(find_best_move(self.gamestate, self.depth,
                                              return_top_n=self.lines) or [])
-                # A forced move is answered without a search, and `find_best_move`
-                # pads it with a placeholder 0. Showing that as "+0.00" would claim
-                # an evaluation nothing computed, so it goes back to None.
                 if len(ranked) == 1 and len(self.gamestate.get_all_legal_moves()) == 1:
                     ranked = [(ranked[0][0], None)]
                 self.ranked = ranked
@@ -91,7 +85,6 @@ class HintThread(threading.Thread):
             self.ranked = []
         finally:
             self.done = True
-
 
 class HintPool:
     """Hint searches for several positions at once, one thread — one core — each.
@@ -116,14 +109,12 @@ class HintPool:
     when they are all taken and the caller tries again next frame.
     """
 
-    #: Answers kept after their search finishes. Each is a handful of tuples, and they
-    #: are what makes stepping back through the game free rather than a re-search.
     KEEP_RESULTS = 128
 
     def __init__(self, workers=1):
         self.workers = max(1, int(workers))
-        self._running = {}                  # key -> HintThread, in flight now
-        self._results = collections.OrderedDict()   # key -> ranked, most recent last
+        self._running = {}
+        self._results = collections.OrderedDict()
 
     def set_workers(self, workers):
         """Change the budget. Searches already in flight are left alone — they cannot

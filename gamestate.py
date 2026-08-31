@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import copy
 from config import BOARD_SIZE
 from pieces import (EMPTY_SQUARE, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING,
@@ -7,8 +6,6 @@ from pieces import (EMPTY_SQUARE, PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING,
 from utils import (get_piece_color, is_on_board, get_opposite_color,
                    piece_to_lower, piece_to_upper)
 
-
-# --- Game State Class ---
 class GameState:
     """Represents the state of a game."""
     def __init__(self):
@@ -29,26 +26,21 @@ class GameState:
         self.needs_promotion_choice = False
         self.promotion_square = None
         self.last_move_for_promotion = None
-        # By default both players are human (the AI can be enabled with the GUI buttons)
-        self.white_ai_enabled = False  # By default the human plays White
-        self.black_ai_enabled = False  # By default the human plays Black (enable the AI with the button!)
-        self.ai_depth = 10  # Deep search — Rust engine handles depth 10 in ~4s
-        self.show_hint = False # Note: show_hint itself is global in main.py
+        self.white_ai_enabled = False
+        self.black_ai_enabled = False
+        self.ai_depth = 10
+        self.show_hint = False
         self._all_legal_moves_cache = None
         self._is_check_cache = None
-        self._hash_cache = None # Cache for the position hash
-        self.ai_history = [] # Stack for AI undo
-        self.promoted_pieces = set()  # coords (r,c) of promoted pieces (ex-pawns)
-        # --- Draw detection state ---
-        self.is_draw = False          # True when the game ended in a draw (not stalemate)
-        self.ply_limit = 200          # Draw by move limit once this many plies are played
-        self.ply_count = 0            # Plies actually played in the real game
-        self.position_history = []    # Every position that OCCURRED, incl. the initial one
-        self.position_counts = {}     # position key -> number of occurrences (mirror of the list)
+        self._hash_cache = None
+        self.ai_history = []
+        self.promoted_pieces = set()
+        self.is_draw = False
+        self.ply_limit = 200
+        self.ply_count = 0
+        self.position_history = []
+        self.position_counts = {}
         self._push_position()
-
-
-    # --- Draw detection helpers ---
 
     def _position_key(self):
         """Immutable identity of the current position for repetition detection.
@@ -111,10 +103,7 @@ class GameState:
             'promoted_pieces': set(self.promoted_pieces),
             'is_draw': self.is_draw,
             'ply_count': self.ply_count,
-            # Only the LENGTH is stored: the history itself is rewound by popping,
-            # so snapshots stay O(1) instead of copying a growing list.
             'history_len': len(self.position_history)
-            # 'last_move_for_promotion' might be needed if undo happens during promotion choice
         }
         self.saved_states.append(state)
 
@@ -124,10 +113,10 @@ class GameState:
             print("Cannot undo further.")
             return False
 
-        self.saved_states.pop() # Remove current state
-        if not self.saved_states: # Should not happen if check above works
+        self.saved_states.pop()
+        if not self.saved_states:
              print("Error: No previous state to restore.")
-             self.setup_initial_board() # Reset to start as fallback
+             self.setup_initial_board()
              self.save_state()
              return False
 
@@ -138,7 +127,7 @@ class GameState:
         self.king_pos = copy.deepcopy(prev_state['king_pos'])
         self.checkmate = prev_state['checkmate']
         self.stalemate = prev_state['stalemate']
-        self.last_move = prev_state.get('last_move') # Use get for safety
+        self.last_move = prev_state.get('last_move')
         self.game_over_message = prev_state['game_over_message']
         self.needs_promotion_choice = prev_state['needs_promotion_choice']
         self.promotion_square = prev_state['promotion_square']
@@ -146,20 +135,16 @@ class GameState:
         self.is_draw = prev_state.get('is_draw', False)
         self.ply_count = prev_state.get('ply_count', self.ply_count)
         self._truncate_position_history(prev_state.get('history_len', len(self.position_history)))
-        # self.last_move_for_promotion = prev_state.get('last_move_for_promotion') # Restore if needed
 
-        # Clear selections and highlights
         self.selected_square = None
         self.selected_drop_piece = None
         self.highlighted_moves = []
-        self._all_legal_moves_cache = None # Clear cache
+        self._all_legal_moves_cache = None
 
         print(f"Move undone. Current turn: {self.current_turn}")
-        # Remove the undone move from the log if necessary
         if self.move_log:
             undone_move = self.move_log.pop()
-        # Ensure king positions are correct after undo
-        self.find_kings() # Recalculate king positions just in case
+        self.find_kings()
 
         return True
 
@@ -179,16 +164,13 @@ class GameState:
             board_copy = [[EMPTY_SQUARE for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
             king_pos_copy = {'w': None, 'b': None}
 
-        # Now create the new object
         new_state = GameState()
 
-        # Assign the copied values
         new_state.board = board_copy
         new_state.current_turn = self.current_turn
-        new_state.hands = hands_copy # Use the ALREADY copied value
+        new_state.hands = hands_copy
         new_state.king_pos = king_pos_copy
 
-        # Copy the remaining attributes (as before)
         new_state.checkmate = self.checkmate
         new_state.stalemate = self.stalemate
         new_state.last_move = self.last_move
@@ -205,8 +187,6 @@ class GameState:
         new_state.promoted_pieces = set(self.promoted_pieces)
         new_state._all_legal_moves_cache = None
 
-        # Draw state: copy() is a true fork of the game, so repetition history
-        # carries over (the keys themselves are immutable, a shallow list copy is enough).
         new_state.is_draw = self.is_draw
         new_state.ply_limit = self.ply_limit
         new_state.ply_count = self.ply_count
@@ -219,19 +199,15 @@ class GameState:
         """Fast copy for AI simulation only - skips history and UI state."""
         new_state = GameState()
         
-        # Fast copy of board (lists)
         new_state.board = [row[:] for row in self.board]
         
-        # Fast copy of hands (dicts)
         new_state.hands = {
             'w': dict(self.hands.get('w', {})),
             'b': dict(self.hands.get('b', {}))
         }
         
-        # Copy king_pos
         new_state.king_pos = dict(self.king_pos)
         
-        # Simple attributes
         new_state.current_turn = self.current_turn
         new_state.checkmate = self.checkmate
         new_state.stalemate = self.stalemate
@@ -239,18 +215,11 @@ class GameState:
         new_state.promotion_square = self.promotion_square
         new_state.promoted_pieces = set(self.promoted_pieces)
 
-        # Draw state: the ply counter and limit are cheap scalars and stay accurate,
-        # but the repetition history is deliberately NOT carried - this copy exists for
-        # throwaway simulation, and copying a long history would defeat its purpose.
-        # The simulated line therefore starts its repetition count from this position.
         new_state.ply_limit = self.ply_limit
-        new_state._reset_position_history()  # resets ply_count/is_draw too
+        new_state._reset_position_history()
         new_state.ply_count = self.ply_count
         new_state.is_draw = self.is_draw
 
-        # NOT copied: saved_states, move_log, UI elements, caches, repetition history
-        # This makes copying ~10-20x faster
-        
         return new_state
 
     def find_kings(self):
@@ -267,18 +236,17 @@ class GameState:
     def setup_initial_board(self):
         """Sets up the starting position on the board."""
         self.board = [
-            ['.', '.', 'b', 'n', 'r', 'k'], # Black pieces (rank 0)
-            ['.', '.', '.', '.', '.', 'p'], # Black pawn
-            ['.', '.', '.', '.', '.', '.'], # Empty ranks
+            ['.', '.', 'b', 'n', 'r', 'k'],
+            ['.', '.', '.', '.', '.', 'p'],
             ['.', '.', '.', '.', '.', '.'],
-            ['P', '.', '.', '.', '.', '.'], # White pawn (rank 4)
-            ['K', 'R', 'N', 'B', '.', '.']  # White pieces (rank 5)
+            ['.', '.', '.', '.', '.', '.'],
+            ['P', '.', '.', '.', '.', '.'],
+            ['K', 'R', 'N', 'B', '.', '.']
         ]
         self.king_pos = {'w': (5, 0), 'b': (0, 5)}
         self.current_turn = 'w'
         self.hands = {'w': {}, 'b': {}}
-        # Initialize hands structure with uppercase keys
-        for p_upper in "PNBR": # Removed Q as queens are not usually captured/dropped in mini-chess? Keep if needed.
+        for p_upper in "PNBR":
              self.hands['w'][p_upper] = 0
              self.hands['b'][p_upper] = 0
 
@@ -287,7 +255,7 @@ class GameState:
         self.last_move = None
         self.move_log = []
         self.game_over_message = ""
-        self.saved_states = [] # Clear history for new game
+        self.saved_states = []
         self.selected_square = None
         self.selected_drop_piece = None
         self.highlighted_moves = []
@@ -295,65 +263,55 @@ class GameState:
         self.promotion_square = None
         self.last_move_for_promotion = None
         self._all_legal_moves_cache = None
-        self._reset_position_history() # Clear history/ply counter, record the initial position
-        self.save_state() # Save the initial state
-
+        self._reset_position_history()
+        self.save_state()
 
     def make_move(self, move, is_check_game_over=True):
         """Makes a move, switches the side to move and checks for game over."""
-        self._all_legal_moves_cache = None # Invalidate cache
+        self._all_legal_moves_cache = None
 
         if self.needs_promotion_choice:
             print("Error: Cannot make move, must choose promotion first.")
             return False
 
-        # --- Handle Drop Move ---
         if move[0] == 'drop':
-            _, piece_code, (r, f) = move # piece_code is 'wN', 'bP', etc.
-            # Correctly determine color from first char, type from second
+            _, piece_code, (r, f) = move
             color = piece_code[0]
-            piece_type_upper = piece_code[1] # Already uppercase 'N', 'P', etc.
+            piece_type_upper = piece_code[1]
 
-            # Validations
             if self.board[r][f] != EMPTY_SQUARE:
                 print(f"Error (drop): Target square {r},{f} not empty.")
                 return False
-            # Use the correctly determined color here
             if color != self.current_turn:
                  print(f"Error (drop): Trying to drop {color} piece ('{piece_code}') on {self.current_turn}'s turn.")
                  return False
-            # Check hand using the uppercase piece type
             if self.hands[color].get(piece_type_upper, 0) <= 0:
                  print(f"Error (drop): No {piece_type_upper} in {color}'s hand. Hand: {self.hands[color]}")
                  return False
-            # Special check for pawn drop on forbidden rank
             if piece_type_upper == 'P':
                  promotion_rank = 0 if color == 'w' else BOARD_SIZE - 1
                  if r == promotion_rank:
                      print(f"Error (drop): Cannot drop pawn {piece_code} on promotion rank {r}.")
                      return False
 
-            # Execute drop
             correct_piece_char = piece_code[1].upper() if color == 'w' else piece_code[1].lower()
             self.board[r][f] = correct_piece_char 
-            self.hands[color][piece_type_upper] -= 1 # Decrement using 'N', 'P', etc.
-            # Removed King check here, kings are not in hand
+            self.hands[color][piece_type_upper] -= 1
 
             self.last_move = move
             self.move_log.append(move)
             self.current_turn = get_opposite_color(self.current_turn)
-            self.selected_square = None # Clear selections
+            self.selected_square = None
             self.selected_drop_piece = None
             self.highlighted_moves = []
 
             self.ply_count += 1
-            self._push_position() # Record the position that just occurred
+            self._push_position()
 
             if is_check_game_over:
-                 self.check_game_over() # Check after opponent's turn starts
+                 self.check_game_over()
             return True
 
-        # --- Handle Regular Move ---
         if len(move) != 3 or not isinstance(move[0], tuple) or not isinstance(move[1], tuple):
              print(f"Error: Invalid move format for regular move: {move}")
              return False
@@ -361,7 +319,6 @@ class GameState:
         (r1, f1), (r2, f2), promotion_choice = move
         piece = self.board[r1][f1]
 
-        # Validations
         if piece == EMPTY_SQUARE:
             print(f"Error (move): Start square {r1},{f1} is empty.")
             return False
@@ -373,89 +330,73 @@ class GameState:
         target_piece = self.board[r2][f2]
         is_capture = target_piece != EMPTY_SQUARE
 
-        # Execute move (part 1: remove piece from start)
         self.board[r1][f1] = EMPTY_SQUARE
 
-        # Handle capture
         if is_capture:
             captured_type = target_piece.upper()
             if captured_type == 'K':
                  print("Error: King capture detected - should not happen in legal moves.")
             else:
-                 # Crazyhouse: promoted piece reverts to pawn when captured
                  if (r2, f2) in self.promoted_pieces:
                      captured_type = 'P'
                      self.promoted_pieces.discard((r2, f2))
-                 # Ensure hand structure exists
                  if moving_color not in self.hands: self.hands[moving_color] = {}
-                 for p_upper in "PNBRQ": # Ensure all keys exist
+                 for p_upper in "PNBRQ":
                       if p_upper not in self.hands[moving_color]: self.hands[moving_color][p_upper] = 0
 
                  self.hands[moving_color][captured_type] = self.hands[moving_color].get(captured_type, 0) + 1
 
-        # Track movement of promoted pieces
         if (r1, f1) in self.promoted_pieces:
             self.promoted_pieces.discard((r1, f1))
             self.promoted_pieces.add((r2, f2))
 
-        # Update King position if King moved
         if piece.upper() == 'K':
             self.king_pos[moving_color] = (r2, f2)
 
-        # Place piece on target square / Handle promotion
         is_pawn_move = piece.upper() == 'P'
         promotion_rank = 0 if moving_color == 'w' else BOARD_SIZE - 1
 
         if is_pawn_move and r2 == promotion_rank:
             if promotion_choice:
-                # Promotion choice is provided (likely by AI or already chosen)
                 valid_promotions = PROMOTION_PIECES_WHITE_STR if moving_color == 'w' else PROMOTION_PIECES_BLACK_STR
                 if promotion_choice not in valid_promotions:
                      print(f"Error: Invalid promotion choice '{promotion_choice}' for {moving_color}.")
-                     # Revert move? Put piece back? For now, just error out.
-                     self.board[r1][f1] = piece # Put piece back
-                     # Need to undo capture as well if it happened
+                     self.board[r1][f1] = piece
                      if is_capture and captured_type != 'K':
                           self.hands[moving_color][captured_type] -= 1
                      return False
                 self.board[r2][f2] = promotion_choice
-                self.promoted_pieces.add((r2, f2))  # track as promoted
-                self.needs_promotion_choice = False # Promotion was handled
+                self.promoted_pieces.add((r2, f2))
+                self.needs_promotion_choice = False
                 self.promotion_square = None
                 self.last_move_for_promotion = None
             else:
-                # Pawn reached promotion rank, but no choice provided yet (human player)
-                self.board[r2][f2] = piece # Temporarily place pawn
+                self.board[r2][f2] = piece
                 self.needs_promotion_choice = True
                 self.promotion_square = (r2, f2)
-                # Store the move *before* promotion choice is made
                 self.last_move_for_promotion = ((r1, f1), (r2, f2), None)
-                self.last_move = self.last_move_for_promotion # Set last move for highlighting etc.
-                self.move_log.append(self.last_move_for_promotion) # Log the base move
-                # Do NOT switch turn yet or check game over
+                self.last_move = self.last_move_for_promotion
+                self.move_log.append(self.last_move_for_promotion)
                 print(f"Pawn reached promotion rank at {r2},{f2}. Waiting for choice.")
-                return True # Indicate move was partially successful, needs completion
+                return True
         else:
-            # Regular move or non-promoting pawn move
             self.board[r2][f2] = piece
-            self.needs_promotion_choice = False # Not a promotion situation
+            self.needs_promotion_choice = False
 
-        # Finalize move
-        self.last_move = move # Store the completed move
+        self.last_move = move
         self.move_log.append(move)
         self.current_turn = get_opposite_color(self.current_turn)
-        self.selected_square = None # Clear selections
+        self.selected_square = None
         self.selected_drop_piece = None
         self.highlighted_moves = []
 
         self.ply_count += 1
-        self._push_position() # Record the position that just occurred
+        self._push_position()
 
         if is_check_game_over:
-            self.check_game_over() # Check after opponent's turn starts
+            self.check_game_over()
 
         return True
-
 
     def complete_promotion(self, chosen_piece_char):
         """Completes a promotion move after the player/AI has chosen a piece."""
@@ -464,8 +405,6 @@ class GameState:
             return False
 
         r, f = self.promotion_square
-        # make_move returns early without switching the turn while a promotion is
-        # pending, so current_turn is still the player who moved the pawn.
         original_player_color = self.current_turn
 
         valid_promotions = PROMOTION_PIECES_WHITE_STR if original_player_color == 'w' else PROMOTION_PIECES_BLACK_STR
@@ -473,65 +412,50 @@ class GameState:
              print(f"Error: Invalid promotion choice '{chosen_piece_char}' for {original_player_color}.")
              return False
 
-        # Update board
         self.board[r][f] = chosen_piece_char
-        self.promoted_pieces.add((r, f))  # track as promoted
+        self.promoted_pieces.add((r, f))
 
-        # Update the last move in the log
         if self.move_log and self.last_move_for_promotion:
-            # Find the base move in the log (should be the last one)
             if self.move_log[-1] == self.last_move_for_promotion:
                  self.move_log.pop()
                  (r1,f1),(r2,f2),_ = self.last_move_for_promotion
                  completed_move = ((r1,f1),(r2,f2), chosen_piece_char)
                  self.move_log.append(completed_move)
-                 self.last_move = completed_move # Update the actual last move
+                 self.last_move = completed_move
             else:
                  print("Warning: Could not find base promotion move in log to update.")
-                 # Log might be inconsistent, proceed with caution
-                 (r1,f1),(r2,f2),_ = self.last_move_for_promotion # Assuming this is correct
+                 (r1,f1),(r2,f2),_ = self.last_move_for_promotion
                  completed_move = ((r1,f1),(r2,f2), chosen_piece_char)
                  self.last_move = completed_move
 
         else:
              print("Warning: Move log or last_move_for_promotion missing during promotion completion.")
-             # Attempt to salvage based on promotion_square
-             # This part is less reliable if state is inconsistent
              if self.last_move and self.last_move[0] != 'drop':
                  (r1,f1),(r2,f2),_ = self.last_move
-                 if (r2, f2) == (r, f): # Check if last move ended here
+                 if (r2, f2) == (r, f):
                      completed_move = ((r1,f1),(r2,f2), chosen_piece_char)
                      self.last_move = completed_move
                  else: print("Error: Cannot reliably update last move for promotion.")
              else: print("Error: Cannot reliably update last move for promotion.")
 
-
-        # Reset promotion state and switch turn
         self.needs_promotion_choice = False
         self.promotion_square = None
         self.last_move_for_promotion = None
-        # make_move deferred the turn switch until the choice was made.
         self.current_turn = get_opposite_color(self.current_turn)
 
-        self.selected_square = None # Clear selections
+        self.selected_square = None
         self.selected_drop_piece = None
         self.highlighted_moves = []
-        self._all_legal_moves_cache = None # Invalidate cache
+        self._all_legal_moves_cache = None
 
-        # The intermediate needs_promotion_choice state was never recorded; the
-        # position is only counted now that the promotion is resolved.
         self.ply_count += 1
         self._push_position()
 
         print(f"Promotion to {chosen_piece_char} completed. Turn: {self.current_turn}")
 
-        # Check game over after promotion is complete and turn switches
         self.check_game_over()
 
         return True
-
-
-    # --- Move Generation Methods ---
 
     def get_pawn_moves(self, r, f, color):
         moves = []
@@ -539,17 +463,14 @@ class GameState:
         promotion_rank = 0 if color == 'w' else BOARD_SIZE - 1
         prom_pieces = PROMOTION_PIECES_WHITE_STR if color == 'w' else PROMOTION_PIECES_BLACK_STR
 
-        # Forward move
         nr, nf = r + direction, f
         if is_on_board(nr, nf) and self.board[nr][nf] == EMPTY_SQUARE:
             if nr == promotion_rank:
-                # Generate promotion moves immediately
                 for prom_piece in prom_pieces:
                     moves.append(((r, f), (nr, nf), prom_piece))
             else:
                 moves.append(((r, f), (nr, nf), None))
 
-        # Captures
         for df in [-1, 1]:
             nr, nf = r + direction, f + df
             if is_on_board(nr, nf):
@@ -581,9 +502,9 @@ class GameState:
                 if target_piece == EMPTY_SQUARE:
                     moves.append(((r, f), (nr, nf), None))
                 elif get_piece_color(target_piece) != color:
-                    moves.append(((r, f), (nr, nf), None)) # Capture
+                    moves.append(((r, f), (nr, nf), None))
                     break
-                else: # Friendly piece
+                else:
                     break
                 nr, nf = nr + dr, nf + df
         return moves
@@ -594,19 +515,17 @@ class GameState:
     def get_rook_moves(self, r, f, color):
          return self.get_sliding_moves(r, f, color, STRAIGHT_MOVES)
 
-    def get_queen_moves(self, r, f, color): # Queens can only appear via drops currently
+    def get_queen_moves(self, r, f, color):
         return self.get_sliding_moves(r, f, color, DIAGONAL_MOVES + STRAIGHT_MOVES)
 
     def get_king_moves(self, r, f, color):
         moves = []
-        # King cannot move into check - this check is done in get_all_legal_moves
         for dr, df in KING_MOVES:
             nr, nf = r + dr, f + df
             if is_on_board(nr, nf):
                 target_piece = self.board[nr][nf]
                 if target_piece == EMPTY_SQUARE or get_piece_color(target_piece) != color:
                      moves.append(((r, f), (nr, nf), None))
-        # Castling is not part of mini crazyhouse
         return moves
 
     def generate_all_pseudo_legal_moves(self, color):
@@ -615,21 +534,13 @@ class GameState:
         """
         moves = []
         drop_moves_generated = []
-
-        # for r_idx, row in enumerate(self.board):
-        #     print(f"      {r_idx}: {row}")
             
-        # Moves from pieces on board
         for r in range(BOARD_SIZE):
             for f in range(BOARD_SIZE):
-                piece = self.board[r][f] # Use self.board
-                piece_color = get_piece_color(piece) # May return None for EMPTY_SQUARE
+                piece = self.board[r][f]
+                piece_color = get_piece_color(piece)
 
-
-                # if r == 5 and f == 4: # Example for dumping a specific square (where wK stands in one of the logs)
-                #    print(f"  Checking ({r},{f}): Piece='{piece}' ({type(piece)}), PieceColor='{piece_color}', ExpectedColor='{color}', EMPTY_SQUARE='{EMPTY_SQUARE}' ({type(EMPTY_SQUARE)})")
                 if piece != EMPTY_SQUARE and piece_color == color:
-                    # print(f"  Found own piece '{piece}' at ({r},{f})")
 
                     piece_type = piece.upper()
                     move_func = None
@@ -641,26 +552,20 @@ class GameState:
                     elif piece_type == KING[0]: move_func = self.get_king_moves
 
                     if move_func:
-                        # Pass r, f, color - the methods will use self.board
-                        # print(f"    Calling {move_func.__name__} for ({r},{f})")
 
                         piece_moves = move_func(r, f, color)
-                        # print(f"    {move_func.__name__} returned: {piece_moves}")
 
                         moves.extend(piece_moves)
 
-        # Drop moves from hand
-        player_hand = self.hands.get(color, {}) # Use self.hands
+        player_hand = self.hands.get(color, {})
         if player_hand:
             for piece_type_upper, count in player_hand.items():
                 if count > 0:
-                    piece_code = color + piece_type_upper # Construct 'wN', 'bP', etc.
-                    # Special check for pawn drop legality (no drop on promotion rank)
+                    piece_code = color + piece_type_upper
                     promotion_rank = 0 if color == 'w' else BOARD_SIZE - 1
                     is_pawn = piece_type_upper == 'P'
 
                     for r in range(BOARD_SIZE):
-                        # Cannot drop pawn on promotion rank
                         if is_pawn and r == promotion_rank:
                             continue
                         for f in range(BOARD_SIZE):
@@ -686,7 +591,6 @@ class GameState:
         pseudo_legal_moves = self.generate_all_pseudo_legal_moves(current_color)
 
         for move in pseudo_legal_moves:
-            # Use fast make/undo instead of deepcopy for legality check
             self.make_ai_move(move)
             is_check_after = self.is_in_check(current_color)
             self.undo_ai_move()
@@ -706,19 +610,16 @@ class GameState:
              if not king_pos:
                   print(f"Warning (is_in_check): the {color} king was not found on the board!")
                   return False
-        # Call the RENAMED method
         return self._internal_is_square_attacked(king_pos[0], king_pos[1], get_opposite_color(color))
 
     def check_game_over(self):
         """Checks and sets checkmate/stalemate/draw flags."""
-        if self.needs_promotion_choice: return False # Game not over yet
+        if self.needs_promotion_choice: return False
 
-        # Check for the player WHOSE TURN IT IS NOW
         current_player_color = self.current_turn
-        legal_moves = self.get_all_legal_moves() # Get legal moves for the current player
+        legal_moves = self.get_all_legal_moves()
 
         if not legal_moves:
-            # Check if the current player is in check
             if self.is_in_check(current_player_color):
                 self.checkmate = True
                 winner = "Black" if current_player_color == 'w' else "White"
@@ -728,9 +629,8 @@ class GameState:
                 self.stalemate = True
                 self.game_over_message = "Stalemate! Draw."
                 print(self.game_over_message)
-            return True # Game is over
+            return True
 
-        # --- Draws (checked only if the side to move still has a move) ---
         current_key = self.position_history[-1] if self.position_history else self._position_key()
         if self.position_counts.get(current_key, 0) >= 3:
             self.is_draw = True
@@ -744,44 +644,35 @@ class GameState:
             print(self.game_over_message)
             return True
 
-        # Game is not over
         self.checkmate = False
         self.stalemate = False
         self.is_draw = False
         self.game_over_message = ""
         return False
 
-    # --- Legality and Check Checking ---
-
-    # METHOD RESTORED
     def _internal_is_square_attacked(self, r, f, attacker_color):
         """Checks whether square (r, f) is attacked by pieces of attacker_color.
            Uses self.board.
         """
         opponent_color = get_opposite_color(attacker_color)
 
-        # Check Pawns
         pawn_piece = PAWN[0] if attacker_color == 'w' else PAWN[1]
-        pawn_dir = -1 if attacker_color == 'w' else 1 # Direction pawns *move*
-        # Pawns attack diagonally forward relative to their movement direction
+        pawn_dir = -1 if attacker_color == 'w' else 1
         for df_attack in [-1, 1]:
-            pr, pf = r - pawn_dir, f + df_attack # Check squares where attacker pawn could be
+            pr, pf = r - pawn_dir, f + df_attack
             if is_on_board(pr, pf) and self.board[pr][pf] == pawn_piece:
                  return True
 
-        # Check Knights
         knight_piece = KNIGHT[0] if attacker_color == 'w' else KNIGHT[1]
         for dr, df in KNIGHT_MOVES:
             nr, nf = r + dr, f + df
             if is_on_board(nr, nf) and self.board[nr][nf] == knight_piece:
                  return True
 
-        # Check Sliding Pieces (Bishops, Rooks, Queens)
         bishop_piece = BISHOP[0] if attacker_color == 'w' else BISHOP[1]
         rook_piece = ROOK[0] if attacker_color == 'w' else ROOK[1]
-        queen_piece = QUEEN[0] if attacker_color == 'w' else QUEEN[1] # Queens can be dropped
+        queen_piece = QUEEN[0] if attacker_color == 'w' else QUEEN[1]
 
-        # Diagonal Attacks (Bishop, Queen)
         for dr, df in DIAGONAL_MOVES:
             cr, cf = r + dr, f + df
             while is_on_board(cr, cf):
@@ -789,10 +680,9 @@ class GameState:
                 if piece != EMPTY_SQUARE:
                     if piece == bishop_piece or piece == queen_piece:
                          return True
-                    break # Path blocked
+                    break
                 cr, cf = cr + dr, cf + df
 
-        # Straight Attacks (Rook, Queen)
         for dr, df in STRAIGHT_MOVES:
             cr, cf = r + dr, f + df
             while is_on_board(cr, cf):
@@ -800,10 +690,9 @@ class GameState:
                 if piece != EMPTY_SQUARE:
                     if piece == rook_piece or piece == queen_piece:
                          return True
-                    break # Path blocked
+                    break
                 cr, cf = cr + dr, cf + df
 
-        # Check King
         king_piece = KING[0] if attacker_color == 'w' else KING[1]
         for dr, df in KING_MOVES:
             kr, kf = r + dr, f + df
@@ -812,15 +701,12 @@ class GameState:
 
         return False
 
-    # --- AI Optimized Move Handling ---
-
     def make_ai_move(self, move):
         """
         Fast move application for AI search.
         Assumes move is legal.
         Saves state to self.ai_history for undo.
         """
-        # 1. Save state info needed for undo
         undo_info = {
             'move': move,
             'captured': None,
@@ -828,10 +714,8 @@ class GameState:
             'prev_checkmate': self.checkmate,
             'prev_stalemate': self.stalemate,
             'prev_last_move': self.last_move,
-            # 'prev_hash': self._hash_cache # If we use incremental hash
         }
         
-        # 2. Apply move
         if move[0] == 'drop':
             _, piece_code, (r, f) = move
             color = piece_code[0]
@@ -850,33 +734,28 @@ class GameState:
             target = self.board[r2][f2]
             color = get_piece_color(piece)
             
-            # Handle capture
             if target != EMPTY_SQUARE:
                 undo_info['captured'] = target
                 captured_type = target.upper()
-                # Crazyhouse: promoted piece reverts to pawn when captured
                 if (r2, f2) in self.promoted_pieces:
                     captured_type = 'P'
                     self.promoted_pieces.discard((r2, f2))
                     undo_info['was_promoted'] = True
                 self.hands[color][captured_type] = self.hands[color].get(captured_type, 0) + 1
             
-            # Track movement of promoted pieces
             if (r1, f1) in self.promoted_pieces:
                 self.promoted_pieces.discard((r1, f1))
                 self.promoted_pieces.add((r2, f2))
                 undo_info['moved_promoted'] = True
 
-            # Update board
             self.board[r1][f1] = EMPTY_SQUARE
             if promotion:
                 self.board[r2][f2] = promotion
-                self.promoted_pieces.add((r2, f2))  # new promotion
+                self.promoted_pieces.add((r2, f2))
                 undo_info['new_promotion'] = True
             else:
                 self.board[r2][f2] = piece
                 
-            # Update King pos
             if piece.upper() == 'K':
                 undo_info['prev_king_pos'] = self.king_pos[color]
                 self.king_pos[color] = (r2, f2)
@@ -884,10 +763,8 @@ class GameState:
             self.last_move = move
             self.current_turn = get_opposite_color(self.current_turn)
 
-        # 3. Push to history
         self.ai_history.append(undo_info)
         
-        # 4. Invalidate caches
         self._all_legal_moves_cache = None
         self._hash_cache = None
         self._is_check_cache = None
@@ -904,7 +781,6 @@ class GameState:
         undo_info = self.ai_history.pop()
         move = undo_info['move']
         
-        # Revert turn
         self.current_turn = get_opposite_color(self.current_turn)
         
         if move[0] == 'drop':
@@ -917,45 +793,36 @@ class GameState:
             
         else:
             (r1, f1), (r2, f2), promotion = move
-            # Current board[r2][f2] is the piece that moved (or promoted)
             moved_piece = self.board[r2][f2]
             color = get_piece_color(moved_piece)
             
-            # Undo promotion tracking
             if undo_info.get('new_promotion'):
                 self.promoted_pieces.discard((r2, f2))
             
-            # If promotion, we need to revert to pawn
             if promotion:
                 moved_piece = 'P' if color == 'w' else 'p'
             
-            # Undo movement of promoted piece
             if undo_info.get('moved_promoted'):
                 self.promoted_pieces.discard((r2, f2))
                 self.promoted_pieces.add((r1, f1))
             
-            # Move back
             self.board[r1][f1] = moved_piece
             
-            # Restore captured
             captured = undo_info['captured']
             if captured:
                 self.board[r2][f2] = captured
-                # Undo the hand change: we added P (if was_promoted) or captured_type
                 if undo_info.get('was_promoted'):
                     self.hands[color]['P'] -= 1
-                    self.promoted_pieces.add((r2, f2))  # restore promoted status
+                    self.promoted_pieces.add((r2, f2))
                 else:
                     self.hands[color][captured.upper()] -= 1
             else:
                 self.board[r2][f2] = EMPTY_SQUARE
                 
-            # Restore King pos
             if undo_info['prev_king_pos']:
                 color = get_piece_color(moved_piece)
                 self.king_pos[color] = undo_info['prev_king_pos']
 
-        # Restore flags
         self.checkmate = undo_info['prev_checkmate']
         self.stalemate = undo_info['prev_stalemate']
         self.last_move = undo_info['prev_last_move']

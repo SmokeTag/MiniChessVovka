@@ -15,12 +15,7 @@ import ai
 import minichess_engine as rs
 from tests.cache_isolation import IsolatedCacheDB
 
-# Relative on purpose. `DB_PATH` in engine_rs/src/cache.rs is the hardcoded relative
-# string "book.db", so the Rust side always opens the DB in the process CWD. Keeping
-# this relative too means both halves follow the chdir in IsolatedCacheDB and land on
-# the same throwaway file.
 DB_PATH = "book.db"
-
 
 def columns(table):
     conn = sqlite3.connect(DB_PATH)
@@ -28,7 +23,6 @@ def columns(table):
         return [col[1] for col in conn.execute(f"PRAGMA table_info({table})")]
     finally:
         conn.close()
-
 
 class TestDatabaseMigration(IsolatedCacheDB):
     """Schema creation and the version-driven rebuild."""
@@ -81,7 +75,6 @@ class TestDatabaseMigration(IsolatedCacheDB):
         self.assertIn("rebuild_book.py", message,
                       "the refusal must say how to rebuild")
 
-        # Untouched: same columns, same row, same version.
         self.assertEqual(columns("book_move"), ["hash", "whatever"])
         conn = sqlite3.connect(DB_PATH)
         try:
@@ -100,7 +93,6 @@ class TestDatabaseMigration(IsolatedCacheDB):
         gs.setup_initial_board()
         rs.find_best_move(gs, 4, 1, None, False)
 
-        # Swap the file out from under the process, mid-run.
         conn = sqlite3.connect(DB_PATH)
         conn.execute("DROP TABLE book_move")
         conn.execute("CREATE TABLE book_move (hash TEXT, whatever TEXT)")
@@ -111,7 +103,6 @@ class TestDatabaseMigration(IsolatedCacheDB):
         with self.assertRaises(RuntimeError):
             ai.save_move_cache_to_db()
 
-        # The search is still pending, so a later save (after a rebuild) can still land it.
         ai.rebuild_book()
         ai.save_move_cache_to_db()
         conn = sqlite3.connect(DB_PATH)
@@ -166,7 +157,6 @@ class TestDatabaseMigration(IsolatedCacheDB):
             conn.close()
         self.assertEqual(rows, 1)
 
-
 class TestDatabaseOperations(IsolatedCacheDB):
     """Book rows survive a load/save cycle through the Rust engine."""
 
@@ -192,8 +182,6 @@ class TestDatabaseOperations(IsolatedCacheDB):
 
         ai.load_move_cache_from_db()
         self.assertEqual(ai.book_size(), 1)
-        # Nothing was searched, so nothing is dirty and the save is a no-op that must
-        # not disturb the rows already there.
         ai.save_move_cache_to_db()
 
         conn = sqlite3.connect(DB_PATH)
@@ -212,7 +200,6 @@ class TestDatabaseOperations(IsolatedCacheDB):
                 (2, "((0, 0), (2, 0), None)", 25, 6),
             ],
         )
-
 
 if __name__ == '__main__':
     unittest.main()

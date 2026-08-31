@@ -1,10 +1,8 @@
 use crate::types::*;
 use crate::zobrist;
 
-/// Default draw-by-move-limit threshold, in plies. Overridable per GameState.
 pub const DEFAULT_PLY_LIMIT: u32 = 200;
 
-/// Undo information for fast make/undo during search
 #[derive(Clone)]
 pub struct UndoInfo {
     pub mov: Move,
@@ -13,9 +11,9 @@ pub struct UndoInfo {
     pub prev_checkmate: bool,
     pub prev_stalemate: bool,
     pub prev_last_move: Move,
-    pub was_promoted: bool,       // captured piece was promoted (reverts to pawn)
-    pub moved_promoted: bool,     // moved piece was a promoted piece
-    pub new_promotion: bool,      // this move is a new promotion
+    pub was_promoted: bool,
+    pub moved_promoted: bool,
+    pub new_promotion: bool,
     pub prev_hash: u64,
 }
 
@@ -23,40 +21,27 @@ pub struct UndoInfo {
 pub struct GameState {
     pub board: [Piece; NUM_SQUARES],
     pub current_turn: Color,
-    pub hands: [[u8; 5]; 2], // [color_index][piece_type_index] = count
-    pub king_pos: [usize; 2], // [color_index] = square
+    pub hands: [[u8; 5]; 2],
+    pub king_pos: [usize; 2],
     pub checkmate: bool,
     pub stalemate: bool,
     pub last_move: Move,
     pub game_over_message: String,
-    pub promoted_pieces: u64, // bitset: bit i = square i has a promoted piece
+    pub promoted_pieces: u64,
     pub hash: u64,
 
-    // ---- Draw detection (real-game path only; the alpha-beta search never
-    // touches these — make_ai_move/undo_ai_move deliberately leave them alone) ----
-    /// Hash of every position that has *occurred* in the game, including the
-    /// initial position. Pushed by make_move/complete_promotion, popped by undo_move.
     pub position_history: Vec<u64>,
-    /// Number of completed plies.
     pub ply: u32,
-    /// Draw is declared once `ply` reaches this. Configurable per game.
     pub ply_limit: u32,
-    /// Set when the game ended in a draw (repetition or ply limit). Deliberately
-    /// distinct from `stalemate`, which search/eval treat specially.
     pub is_draw: bool,
 
-    // UI-related fields (not used in search, but needed for Python compat)
     pub needs_promotion_choice: bool,
     pub promotion_square: Option<usize>,
 
-    // Search stack
     pub ai_history: Vec<UndoInfo>,
 
-    /// Undo info for a move that is waiting on a promotion choice. Completed and
-    /// pushed onto `ai_history` by `complete_promotion`.
     pending_undo: Option<UndoInfo>,
 
-    // Cached legal moves
     legal_moves_cache: Option<Vec<Move>>,
 }
 
@@ -86,11 +71,6 @@ impl GameState {
     }
 
     pub fn setup_initial_board(&mut self) {
-        // Row 0: ['.', '.', 'b', 'n', 'r', 'k']
-        // Row 1: ['.', '.', '.', '.', '.', 'p']
-        // Row 2-3: empty
-        // Row 4: ['P', '.', '.', '.', '.', '.']
-        // Row 5: ['K', 'R', 'N', 'B', '.', '.']
         self.board = [Piece::Empty; NUM_SQUARES];
         self.board[sq(0, 2)] = Piece::BlackBishop;
         self.board[sq(0, 3)] = Piece::BlackKnight;
@@ -103,7 +83,7 @@ impl GameState {
         self.board[sq(5, 2)] = Piece::WhiteKnight;
         self.board[sq(5, 3)] = Piece::WhiteBishop;
 
-        self.king_pos = [sq(5, 0), sq(0, 5)]; // [White, Black]
+        self.king_pos = [sq(5, 0), sq(0, 5)];
         self.current_turn = Color::White;
         self.hands = [[0; 5]; 2];
         self.checkmate = false;
@@ -125,14 +105,11 @@ impl GameState {
         self.position_history.push(self.hash);
     }
 
-    /// How many times the current position has occurred in this game (>= 1 once
-    /// the initial position has been recorded).
     pub fn repetition_count(&self) -> usize {
         let h = self.hash;
         self.position_history.iter().filter(|&&x| x == h).count()
     }
 
-    /// Record the position reached by a completed ply.
     #[inline]
     fn record_position(&mut self) {
         self.ply += 1;
@@ -157,16 +134,11 @@ impl GameState {
         self.legal_moves_cache = None;
     }
 
-    // ============================================================
-    // Move generation
-    // ============================================================
-
     fn gen_pawn_moves(&self, r: usize, f: usize, color: Color, moves: &mut Vec<Move>) {
         let s = sq(r, f);
         let dir: i32 = if color == Color::White { -1 } else { 1 };
         let promo_rank = if color == Color::White { 0 } else { BOARD_SIZE - 1 };
 
-        // Forward
         let nr = r as i32 + dir;
         let nf = f as i32;
         if is_on_board(nr, nf) {
@@ -182,7 +154,6 @@ impl GameState {
             }
         }
 
-        // Captures
         for df in [-1i32, 1] {
             let nr = r as i32 + dir;
             let nf = f as i32 + df;
@@ -344,7 +315,6 @@ impl GameState {
         self.legal_moves_cache.as_ref().unwrap()
     }
 
-    /// Non-caching version that returns owned Vec (for use in search where we need ownership)
     pub fn get_legal_moves_vec(&mut self) -> Vec<Move> {
         if let Some(ref cache) = self.legal_moves_cache {
             return cache.clone();
@@ -370,15 +340,10 @@ impl GameState {
         legal
     }
 
-    // ============================================================
-    // Attack detection
-    // ============================================================
-
     pub fn is_square_attacked(&self, target_sq: usize, attacker_color: Color) -> bool {
         let r = sq_row(target_sq) as i32;
         let f = sq_file(target_sq) as i32;
 
-        // Pawn attacks
         let pawn_piece = Piece::from_color_type(attacker_color, PieceType::Pawn);
         let pawn_dir: i32 = if attacker_color == Color::White { -1 } else { 1 };
         for df in [-1i32, 1] {
@@ -389,7 +354,6 @@ impl GameState {
             }
         }
 
-        // Knight attacks
         let knight_piece = Piece::from_color_type(attacker_color, PieceType::Knight);
         for &(dr, df) in &KNIGHT_OFFSETS {
             let nr = r + dr;
@@ -399,7 +363,6 @@ impl GameState {
             }
         }
 
-        // Sliding attacks (Bishop/Queen on diagonals, Rook/Queen on straights)
         let bishop = Piece::from_color_type(attacker_color, PieceType::Bishop);
         let queen = Piece::from_color_type(attacker_color, PieceType::Queen);
         for &(dr, df) in &DIAGONAL_OFFSETS {
@@ -435,7 +398,6 @@ impl GameState {
             }
         }
 
-        // King attacks
         let king_piece = Piece::from_color_type(attacker_color, PieceType::King);
         for &(dr, df) in &KING_OFFSETS {
             let kr = r + dr;
@@ -473,7 +435,6 @@ impl GameState {
         self.checkmate = false;
         self.stalemate = false;
 
-        // Draws. Reported distinctly from stalemate: `is_draw`, never `stalemate`.
         if self.repetition_count() >= 3 {
             self.is_draw = true;
             self.game_over_message = "Draw by repetition.".to_string();
@@ -489,10 +450,6 @@ impl GameState {
         self.game_over_message.clear();
         false
     }
-
-    // ============================================================
-    // AI-optimized make/undo
-    // ============================================================
 
     pub fn make_ai_move(&mut self, m: Move) {
         let prev_hash = self.hash;
@@ -526,15 +483,11 @@ impl GameState {
             let target = self.board[to];
             let color = piece.color().unwrap();
 
-            // Handle capture
             if target != Piece::Empty {
                 undo.captured = target;
                 let mut captured_type = target.piece_type().unwrap();
-                // Kings can't be captured/added to hand
                 if captured_type == PieceType::King {
-                    // Illegal state — skip hand update
                 } else {
-                    // Crazyhouse: promoted piece reverts to pawn
                     if self.promoted_pieces & (1u64 << to) != 0 {
                         captured_type = PieceType::Pawn;
                         self.promoted_pieces &= !(1u64 << to);
@@ -544,14 +497,12 @@ impl GameState {
                 }
             }
 
-            // Track promoted piece movement
             if self.promoted_pieces & (1u64 << from) != 0 {
                 self.promoted_pieces &= !(1u64 << from);
                 self.promoted_pieces |= 1u64 << to;
                 undo.moved_promoted = true;
             }
 
-            // Update board
             self.board[from] = Piece::Empty;
             if let Some(promo_pt) = m.promotion() {
                 self.board[to] = Piece::from_color_type(color, promo_pt);
@@ -561,7 +512,6 @@ impl GameState {
                 self.board[to] = piece;
             }
 
-            // Update king position
             if piece.piece_type() == Some(PieceType::King) {
                 undo.prev_king_pos = Some(self.king_pos[color.index()]);
                 self.king_pos[color.index()] = to;
@@ -597,18 +547,15 @@ impl GameState {
             let moved_piece = self.board[to];
             let color = moved_piece.color().unwrap();
 
-            // Undo new promotion tracking
             if undo.new_promotion {
                 self.promoted_pieces &= !(1u64 << to);
             }
 
-            // Undo promoted piece movement
             if undo.moved_promoted {
                 self.promoted_pieces &= !(1u64 << to);
                 self.promoted_pieces |= 1u64 << from;
             }
 
-            // If was promotion, revert to pawn
             let original_piece = if m.promotion().is_some() {
                 Piece::from_color_type(color, PieceType::Pawn)
             } else {
@@ -617,7 +564,6 @@ impl GameState {
 
             self.board[from] = original_piece;
 
-            // Restore captured piece
             if undo.captured != Piece::Empty {
                 self.board[to] = undo.captured;
                 if undo.was_promoted {
@@ -633,7 +579,6 @@ impl GameState {
                 self.board[to] = Piece::Empty;
             }
 
-            // Restore king position
             if let Some(prev_kp) = undo.prev_king_pos {
                 self.king_pos[color.index()] = prev_kp;
             }
@@ -646,7 +591,6 @@ impl GameState {
         self.hash = undo.prev_hash;
     }
 
-    /// Full make_move (for GUI/online play, handles promotion choice)
     pub fn make_move(&mut self, m: Move, check_game_over: bool) -> bool {
         self.legal_moves_cache = None;
 
@@ -682,7 +626,6 @@ impl GameState {
             if self.hands[color.index()][pt.index()] == 0 {
                 return false;
             }
-            // Pawn drop restriction
             let promo_rank = if color == Color::White { 0 } else { BOARD_SIZE - 1 };
             if pt == PieceType::Pawn && sq_row(to) == promo_rank {
                 return false;
@@ -704,7 +647,6 @@ impl GameState {
             return true;
         }
 
-        // Normal move
         let from = m.from_sq();
         let to = m.to_sq();
         let piece = self.board[from];
@@ -738,7 +680,6 @@ impl GameState {
             }
         }
 
-        // Track promoted piece movement
         if self.promoted_pieces & (1u64 << from) != 0 {
             self.promoted_pieces &= !(1u64 << from);
             self.promoted_pieces |= 1u64 << to;
@@ -761,16 +702,13 @@ impl GameState {
                 self.needs_promotion_choice = false;
                 self.promotion_square = None;
             } else {
-                // Pawn reached promotion rank, waiting for choice. The ply is not
-                // complete yet, so nothing is recorded in the position history —
-                // complete_promotion records the finished position instead.
                 self.board[to] = piece;
                 self.needs_promotion_choice = true;
                 self.promotion_square = Some(to);
                 self.last_move = m;
                 self.hash = self.compute_hash();
                 self.pending_undo = Some(undo);
-                return true; // partial success
+                return true;
             }
         } else {
             self.board[to] = piece;
@@ -789,12 +727,8 @@ impl GameState {
         true
     }
 
-    /// Full undo for the real-game path (GUI / bot / self-play). Reverses the last
-    /// `make_move` (or completed promotion) and rolls the position history back.
     pub fn undo_move(&mut self) -> bool {
         if self.needs_promotion_choice {
-            // Mid-promotion: the ply was never completed, so there is nothing
-            // consistent to roll back to. The caller must finish the promotion first.
             return false;
         }
         if self.ai_history.is_empty() {
@@ -822,7 +756,6 @@ impl GameState {
             Some(s) => s,
             None => return false,
         };
-        // Color is the one who just moved (turn hasn't switched yet during promotion wait)
         let color = self.current_turn;
         let piece = Piece::from_color_type(color, promo_pt);
         self.board[to] = piece;
@@ -834,9 +767,6 @@ impl GameState {
         self.legal_moves_cache = None;
         self.hash = self.compute_hash();
 
-        // The ply is only now complete: finish the undo record make_move stashed
-        // (rewriting the move so undo_ai_move knows to revert the piece to a pawn)
-        // and record the resulting position.
         if let Some(mut undo) = self.pending_undo.take() {
             undo.mov = Move::new_normal(undo.mov.from_sq(), to, Some(promo_pt));
             undo.new_promotion = true;
@@ -860,8 +790,6 @@ impl GameState {
             game_over_message: String::new(),
             promoted_pieces: self.promoted_pieces,
             hash: self.hash,
-            // Inherited so a simulated continuation still sees repetitions that
-            // already happened in the real game.
             position_history: self.position_history.clone(),
             ply: self.ply,
             ply_limit: self.ply_limit,

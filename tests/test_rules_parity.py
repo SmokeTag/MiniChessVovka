@@ -30,12 +30,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from gamestate import GameState
 import minichess_engine as _rs
 
-# 50 paired games is ~0.9s and reliably reaches promotions, drops and draws.
-# Drift detection scales with volume, so CI or a rules change wants more.
 DEFAULT_GAMES = int(os.environ.get("RULES_PARITY_GAMES", "50"))
 SEED = 20260826
-MAX_PLY = 400  # above any ply_limit; a game hitting this failed to terminate
-
+MAX_PLY = 400
 
 def _norm(moves):
     """Legal moves as a set -- the two generators need not agree on order."""
@@ -47,10 +44,8 @@ def _norm(moves):
             out.add((tuple(m[0]), tuple(m[1]), m[2]))
     return out
 
-
 def _flags(state):
     return (bool(state.checkmate), bool(state.stalemate), bool(state.is_draw))
-
 
 def _play_paired(n_games=DEFAULT_GAMES, seed=SEED):
     """Play n_games through both implementations in lockstep.
@@ -92,7 +87,6 @@ def _play_paired(n_games=DEFAULT_GAMES, seed=SEED):
                 lengths.append(ply)
                 break
 
-            # Both sides get the identical move, promotion case included.
             move = rng.choice(sorted(pm, key=repr))
             py.make_move(move, False)
             rs.make_move(move, False)
@@ -116,9 +110,7 @@ def _play_paired(n_games=DEFAULT_GAMES, seed=SEED):
 
     return mismatches, reasons, lengths
 
-
 _cached = None
-
 
 def _paired_run():
     """Run once, share across the tests in this module."""
@@ -126,7 +118,6 @@ def _paired_run():
     if _cached is None:
         _cached = _play_paired()
     return _cached
-
 
 def test_rule_implementations_agree():
     """gamestate.py and engine_rs agree at every ply of every game."""
@@ -137,7 +128,6 @@ def test_rule_implementations_agree():
         raise AssertionError(
             f"{len(mismatches)} rule mismatch(es) between gamestate.py and "
             f"engine_rs (seed {SEED}):\n{detail}")
-
 
 def test_every_game_terminates():
     """No game runs forever.
@@ -151,7 +141,6 @@ def test_every_game_terminates():
         f"{reasons['NO TERMINATION']} game(s) hit {MAX_PLY} plies without "
         f"terminating; termination breakdown: {dict(reasons)}")
     assert lengths, "no games were played"
-
 
 def test_promotion_chars_are_colour_cased():
     """Both implementations case promotion chars by colour.
@@ -190,11 +179,8 @@ def test_promotion_chars_are_colour_cased():
         for m in rs_proms:
             assert expected(m[2]), f"{turn}: engine_rs promotion {m} wrongly cased"
 
-        # An engine move must apply to the Python state as-is. This is the path
-        # the planned MCTS takes, with no normalisation layer in between.
         applied = py.make_move(rs_proms[0], False)
         assert applied, f"{turn}: engine_rs move {rs_proms[0]} refused by gamestate.py"
-
 
 if __name__ == "__main__":
     ms, rs_, ls = _play_paired()

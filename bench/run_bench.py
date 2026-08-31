@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Benchmark harness for the engine's root-parallel search.
 
@@ -41,7 +40,6 @@ sys.path.insert(0, REPO_ROOT)
 
 RESULT_MARKER = "@@BENCH@@"
 
-# "  [PARALLEL] depth 7: baseline 0.42s, scout 0.31s (23 moves), re-search 0.08s (2 moves)"
 PARALLEL_RE = re.compile(
     r"\[PARALLEL\] depth (\d+): baseline ([0-9.]+)s, scout ([0-9.]+)s \((\d+) moves\), "
     r"re-search ([0-9.]+)s \((\d+) moves\)"
@@ -49,11 +47,6 @@ PARALLEL_RE = re.compile(
 PARALLEL_ON_RE = re.compile(r"\[PARALLEL\] root split enabled from depth (\d+)")
 
 LOAD_WARN_THRESHOLD = 4.0
-
-
-# --------------------------------------------------------------------------- #
-# child: one process, one search
-# --------------------------------------------------------------------------- #
 
 def run_child(args):
     """Search exactly one (position, depth, mode) and print one JSON line."""
@@ -67,23 +60,17 @@ def run_child(args):
 
     legal = gs.get_all_legal_moves()
     if len(legal) < 2:
-        # find_best_move short-circuits here and would measure nothing.
         emit({"position": args.position, "depth": args.depth, "mode": args.mode,
               "error": "position has %d legal move(s)" % len(legal)})
         return 1
 
     parallel = args.mode == "par"
     if parallel and args.par_min_depth:
-        # Only touches process-wide state in the parallel child; the sequential
-        # child never calls this, so its path is bit-for-bit the default one.
         rs.set_parallel_search(True, args.par_min_depth)
 
     rust_gs = ai._sync_to_rust(gs)
 
-    # Time the engine call only: no Python move generation, no state sync.
     start = time.perf_counter()
-    # find_best_move_with_score, not return_top_n=2: asking for a second rank would
-    # switch the engine into a MultiPV search and stop measuring the path training runs.
     best_move, score = rs.find_best_move_with_score(rust_gs, args.depth, None, parallel)
     seconds = time.perf_counter() - start
     emit({
@@ -100,13 +87,9 @@ def run_child(args):
     })
     return 0
 
-
 def emit(payload):
-    # config.py prints a pygame banner on import, so the result line is marked
-    # rather than assumed to be the only thing on stdout.
     sys.stdout.write("%s %s\n" % (RESULT_MARKER, json.dumps(payload)))
     sys.stdout.flush()
-
 
 def move_str(move):
     """Human-readable move, e.g. 'e2e4', 'e7e8R', 'N@c3'."""
@@ -124,17 +107,11 @@ def move_str(move):
     promo = move[2] or ""
     return "%s%s%s" % (sq(move[0]), sq(move[1]), promo)
 
-
-# --------------------------------------------------------------------------- #
-# parent: orchestration
-# --------------------------------------------------------------------------- #
-
 def load_average():
     try:
         return list(os.getloadavg())
     except (OSError, AttributeError):
         return None
-
 
 def uptime_line():
     try:
@@ -143,14 +120,12 @@ def uptime_line():
     except Exception:
         return None
 
-
 def nproc():
     try:
         return int(subprocess.run(["nproc"], capture_output=True, text=True,
                                   timeout=10).stdout.strip())
     except Exception:
         return os.cpu_count()
-
 
 def parse_parallel_stderr(stderr):
     """Pull the [PARALLEL] split timings out of the engine's stderr."""
@@ -166,7 +141,6 @@ def parse_parallel_stderr(stderr):
         })
     enabled_from = PARALLEL_ON_RE.search(stderr)
     return splits, (int(enabled_from.group(1)) if enabled_from else None)
-
 
 def run_one(python, position, depth, mode, par_min_depth, timeout, keep_stderr):
     """Spawn one fresh interpreter for exactly one search."""
@@ -206,7 +180,6 @@ def run_one(python, position, depth, mode, par_min_depth, timeout, keep_stderr):
         payload["stderr"] = proc.stderr
     return payload
 
-
 def reduce_repeats(runs):
     """Minimum across repeats; keep every sample so the spread stays visible."""
     ok = [r for r in runs if "error" not in r and r.get("seconds") is not None]
@@ -226,7 +199,6 @@ def reduce_repeats(runs):
     out["max_load_seen"] = max(loads) if loads else None
     out["load_suspect"] = bool(loads and max(loads) > LOAD_WARN_THRESHOLD)
     return out
-
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
@@ -347,7 +319,6 @@ def main():
         print("NOTE: %d/%d cells ran with load average > %.1f - treat their "
               "scaling numbers as unreliable." % (len(suspect), len(results), LOAD_WARN_THRESHOLD))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """All rendering for the Pygame front end.
 
 Every function takes a `layout.Layout` and derives its pixel sizes from it, so the
@@ -25,14 +24,11 @@ from utils import (coords_to_algebraic, format_score, get_piece_color, piece_to_
 
 pygame.init()
 
-# --- Caches -----------------------------------------------------------------
-
-_ORIGINALS = {}      # piece char -> unscaled Surface
-_SCALED = {}         # (piece char, px) -> Surface
-_FONTS = {}          # (family, px, bold) -> Font
+_ORIGINALS = {}
+_SCALED = {}
+_FONTS = {}
 
 _HAND_ORDER = ['P', 'N', 'B', 'R', 'Q']
-
 
 def get_font(px, bold=False, family='segoeui'):
     key = (family, px, bold)
@@ -42,7 +38,6 @@ def get_font(px, bold=False, family='segoeui'):
         _FONTS[key] = font
     return font
 
-
 def piece_image(char, px):
     """Piece sprite scaled to `px`, memoised. None if the sprite never loaded."""
     key = (char, px)
@@ -51,12 +46,11 @@ def piece_image(char, px):
         original = _ORIGINALS.get(char)
         if original is None:
             return None
-        if len(_SCALED) > 240:      # bound growth during a resize drag
+        if len(_SCALED) > 240:
             _SCALED.clear()
         surface = pygame.transform.smoothscale(_fit_square(original, px), (px, px))
         _SCALED[key] = surface
     return surface
-
 
 def _fit_square(surface, px):
     """Letterbox `surface` into a transparent px-by-px square, preserving aspect."""
@@ -69,7 +63,6 @@ def _fit_square(surface, px):
     canvas.blit(scaled, scaled.get_rect(center=(px // 2, px // 2)))
     return canvas
 
-
 def _invert_colors(surface):
     """Black sprite -> white sprite, preserving alpha."""
     out = surface.copy()
@@ -81,7 +74,6 @@ def _invert_colors(surface):
                 out.set_at((x, y), (255 - r, 255 - g, 255 - b, a))
     out.unlock()
     return out
-
 
 def load_images(image_dir="assets/sprites"):
     """Load piece sprites once at full resolution. Scaling happens in piece_image."""
@@ -110,16 +102,12 @@ def load_images(image_dir="assets/sprites"):
         loaded += 1
     if loaded == 0:
         print("[gui] no sprites loaded; falling back to text pieces")
-    return True     # text fallback keeps the game playable either way
-
-
-# --- Small drawing helpers --------------------------------------------------
+    return True
 
 def _alpha_rect(screen, rect, color):
     surface = pygame.Surface(rect.size, pygame.SRCALPHA)
     surface.fill(color)
     screen.blit(surface, rect.topleft)
-
 
 def _text(screen, text, font, color, *, center=None, midleft=None, midright=None, topleft=None):
     surface = font.render(text, True, color)
@@ -134,7 +122,6 @@ def _text(screen, text, font, color, *, center=None, midleft=None, midright=None
     screen.blit(surface, rect)
     return rect
 
-
 def _clip_text(text, font, max_w):
     """Truncate with an ellipsis so long labels clip instead of overflowing."""
     if font.size(text)[0] <= max_w:
@@ -142,7 +129,6 @@ def _clip_text(text, font, max_w):
     while text and font.size(text + "…")[0] > max_w:
         text = text[:-1]
     return text + "…"
-
 
 def draw_button(screen, layout, rect, label, *, bg, fg=WHITE, hovered=False,
                 enabled=True, badge=None, badge_color=None):
@@ -160,7 +146,6 @@ def draw_button(screen, layout, rect, label, *, bg, fg=WHITE, hovered=False,
 
     font = get_font(layout.font_size(14), bold=True)
     if badge is not None:
-        # Label left, state pill right — reads faster than "AI White: ON".
         pad = layout.s(8)
         pill_font = get_font(layout.font_size(12), bold=True)
         pill_w = pill_font.size(badge)[0] + layout.s(12)
@@ -173,9 +158,6 @@ def draw_button(screen, layout, rect, label, *, bg, fg=WHITE, hovered=False,
         _text(screen, _clip_text(label, font, rect.w - layout.s(12)), font, fg, center=rect.center)
     return rect
 
-
-# --- Board ------------------------------------------------------------------
-
 def draw_board(screen, layout, flipped):
     """Checkerboard plus edge coordinates."""
     coord_font = get_font(layout.font_size(12), bold=True, family='consolas')
@@ -186,7 +168,6 @@ def draw_board(screen, layout, flipped):
             rect = layout.square_rect(r, f, flipped)
             pygame.draw.rect(screen, BOARD_COLORS['light' if light else 'dark'], rect)
 
-            # Ranks label the left file on screen, files label the bottom rank.
             screen_col = BOARD_SIZE - 1 - f if flipped else f
             screen_row = BOARD_SIZE - 1 - r if flipped else r
             label_color = BOARD_COLORS['dark' if light else 'light']
@@ -200,7 +181,6 @@ def draw_board(screen, layout, flipped):
                                       rect.bottom - surface.get_height() - inset))
 
     pygame.draw.rect(screen, PANEL_COLORS['border'], layout.board, layout.s(2))
-
 
 def draw_pieces(screen, layout, board, flipped, skip=None):
     """Blit pieces. `skip` omits one square — the piece being dragged."""
@@ -219,7 +199,6 @@ def draw_pieces(screen, layout, board, flipped, skip=None):
             else:
                 color = WHITE if get_piece_color(piece) == 'w' else BLACK
                 _text(screen, PIECE_TO_SYMBOL.get(piece, piece), fallback, color, center=rect.center)
-
 
 def draw_board_overlays(screen, layout, view, ui):
     """Last move, check, selection, legal targets, illegal-click flashes."""
@@ -241,7 +220,6 @@ def draw_board_overlays(screen, layout, view, ui):
     if ui.selected_square:
         _alpha_rect(screen, layout.square_rect(*ui.selected_square, flipped), HIGHLIGHT_COLORS['selected'])
 
-    # Move targets: a dot for a quiet move, a ring for a capture.
     for target in ui.move_targets:
         rect = layout.square_rect(*target, flipped)
         occupied = view.board[target[0]][target[1]] != EMPTY_SQUARE
@@ -254,8 +232,6 @@ def draw_board_overlays(screen, layout, view, ui):
                                (rect.w // 2, rect.h // 2), max(3, rect.w // 7))
         screen.blit(surface, rect.topleft)
 
-    # Drop targets get a tinted square rather than a dot: dropping is a different
-    # action from moving and should not look the same.
     for target in ui.drop_targets:
         _alpha_rect(screen, layout.square_rect(*target, flipped), HIGHLIGHT_COLORS['drop_target'])
 
@@ -267,16 +243,10 @@ def draw_board_overlays(screen, layout, view, ui):
         _alpha_rect(screen, layout.square_rect(*square, flipped),
                     (color[0], color[1], color[2], int(color[3] * strength)))
 
-
-# Rank 1 is drawn full strength; every rank below it is dimmed and thinned by this
-# factor, compounding. Two lines at equal weight read as two recommendations rather
-# than a ranking, which is exactly what a MultiPV list is not.
 _RANK_FADE = 0.62
-
 
 def _fade(color, amount):
     return tuple(int(c * amount) for c in color[:3])
-
 
 def draw_hint_line(screen, layout, hint_move, flipped, rank=0):
     """One ranked hint. `rank` 0 is the engine's first choice."""
@@ -320,7 +290,6 @@ def draw_hint_line(screen, layout, hint_move, flipped, rank=0):
     ])
     _rank_pip(screen, layout, layout.square_rect(*hint_move[1], flipped).topleft, rank, arrow)
 
-
 def _rank_pip(screen, layout, topleft, rank, color):
     """Number the arrow when there is more than one — an unlabelled second arrow
     is indistinguishable from a stale first one."""
@@ -332,12 +301,10 @@ def _rank_pip(screen, layout, topleft, rank, color):
     pygame.draw.circle(screen, color, center, r, max(1, layout.s(2)))
     _text(screen, str(rank + 1), get_font(layout.font_size(11), bold=True), WHITE, center=center)
 
-
 def draw_hint(screen, layout, ranked, flipped):
     """Draw the whole hint list, weakest first so rank 1 lands on top."""
     for rank in range(len(ranked) - 1, -1, -1):
         draw_hint_line(screen, layout, ranked[rank][0], flipped, rank)
-
 
 def draw_drag(screen, layout, ui):
     """The dragged piece follows the cursor, centred under it."""
@@ -351,9 +318,6 @@ def draw_drag(screen, layout, ui):
         _text(screen, PIECE_TO_SYMBOL.get(ui.drag['piece'], ui.drag['piece']),
               get_font(layout.font_size(44), bold=True),
               WHITE if get_piece_color(ui.drag['piece']) == 'w' else BLACK, center=ui.mouse_pos)
-
-
-# --- Hands (drop inventory, beside the board) --------------------------------
 
 def draw_hands(screen, layout, view, ui, hits):
     """Draw both hand strips and register their click targets.
@@ -411,8 +375,6 @@ def draw_hands(screen, layout, view, ui, hits):
                     _text(screen, PIECE_TO_SYMBOL.get(char, char), count_font,
                           WHITE if color == 'w' else BLACK, center=rect.center)
 
-            # Count as a numeral, not repeated sprites: a full hand used to wrap
-            # onto extra rows and shove every control below it down the panel.
             if count > 1:
                 badge = f"×{count}"
                 bw, bh = count_font.size(badge)
@@ -429,15 +391,11 @@ def draw_hands(screen, layout, view, ui, hits):
             _text(screen, "empty", get_font(layout.font_size(12)), PANEL_COLORS['text_faint'],
                   midleft=(x, strip.centery))
 
-
-# --- Side panel --------------------------------------------------------------
-
 def _draw_spinner(screen, layout, center, radius, phase, color):
     box = pygame.Rect(0, 0, radius * 2, radius * 2)
     box.center = center
     start = phase % (2 * math.pi)
     pygame.draw.arc(screen, color, box, start, start + 1.9, max(2, layout.s(3)))
-
 
 def _draw_eval(screen, layout, rect, ui):
     """White-relative score: a saturating bar plus the number that produced it.
@@ -464,8 +422,6 @@ def _draw_eval(screen, layout, rect, ui):
     source_rect = _text(screen, ui.score_source, source_font, PANEL_COLORS['text_faint'],
                         midright=(rect.right - layout.s(10), rect.centery))
 
-    # Bar fills the gap between the two labels; it is the first thing read, so it
-    # gets whatever width is left rather than a fixed slice.
     bar_x = value_rect.right + layout.s(10)
     bar_w = source_rect.left - layout.s(10) - bar_x
     if bar_w < layout.s(30):
@@ -482,7 +438,6 @@ def _draw_eval(screen, layout, rect, ui):
                          side, border_radius=layout.s(4))
     pygame.draw.line(screen, PANEL_COLORS['text_faint'], (mid, bar.y), (mid, bar.bottom - 1))
 
-
 def _draw_header(screen, layout, view, ui):
     panel_x, width = layout.header.x, layout.header.w
     y = layout.header.y
@@ -491,7 +446,6 @@ def _draw_header(screen, layout, view, ui):
           PANEL_COLORS['text_faint'], midleft=(panel_x, y + layout.s(13)))
     y += layout.s(26) + layout.s(6)
 
-    # Turn card
     card = pygame.Rect(panel_x, y, width, layout.s(34))
     pygame.draw.rect(screen, PANEL_COLORS['raised'], card, border_radius=layout.s(6))
     dot_r = layout.s(6)
@@ -508,12 +462,9 @@ def _draw_header(screen, layout, view, ui):
           midright=(card.right - layout.s(12), card.centery))
     y = card.bottom + layout.s(6)
 
-    # Eval row.
     _draw_eval(screen, layout, pygame.Rect(panel_x, y, width, layout.eval_h), ui)
     y += layout.eval_h + layout.s(6)
 
-    # Engine row — the fix for "the app looks frozen". Always says what the
-    # engine is doing and, once past a second, how long it has been doing it.
     row = pygame.Rect(panel_x, y, width, layout.s(30))
     if ui.thinking:
         pygame.draw.rect(screen, (46, 52, 64), row, border_radius=layout.s(6))
@@ -548,7 +499,6 @@ def _draw_header(screen, layout, view, ui):
                            (row.x + layout.s(6), row.centery), layout.s(3))
         _text(screen, ui.idle_status, get_font(layout.font_size(13)), PANEL_COLORS['text_dim'],
               midleft=(row.x + layout.s(16), row.centery))
-
 
 def _draw_controls(screen, layout, ui, hits):
     mouse = ui.mouse_pos
@@ -586,10 +536,6 @@ def _draw_controls(screen, layout, ui, hits):
                   note=ui.hint_lines_label,
                   at_min=not ui.can_lines_down, at_max=not ui.can_lines_up,
                   muted=not ui.show_hint)
-    # How many positions the hint pool may search side by side, one core each. The note
-    # switches to a live count while searches are in flight, because those are cores
-    # busy on positions that are not the one on screen — otherwise the machine sounds
-    # loaded for no reason the window accounts for.
     busy = ui.hint_active
     _draw_stepper(screen, layout, hits, mouse, row=5, name='workers',
                   title=f"{ui.hint_workers} hint core" + ("" if ui.hint_workers == 1 else "s"),
@@ -597,15 +543,10 @@ def _draw_controls(screen, layout, ui, hits):
                   at_min=not ui.can_workers_down, at_max=not ui.can_workers_up,
                   muted=not ui.show_hint)
 
-    # The only thing in this window that writes to book_move. The badge answers the
-    # question a curator actually has in front of a position — is this line already in
-    # my repertoire? — which the in-memory book cannot answer once the analysis cache is
-    # merged into it, since both stores share one map.
     button('save_book', layout.button_grid(6, 0, span=2), "Save position to book",
            HIGHLIGHT_COLORS['trainer'], enabled=ui.can_save_book,
            badge="IN BOOK" if ui.in_book else "SAVE",
            badge_color=(24, 84, 48) if ui.in_book else (18, 74, 74))
-
 
 def _draw_stepper(screen, layout, hits, mouse, *, row, name, title, note,
                   at_min, at_max, muted=False):
@@ -641,7 +582,6 @@ def _draw_stepper(screen, layout, hits, mouse, *, row, name, title, note,
     _text(screen, _clip_text(note, note_font, middle.w // 2), note_font,
           PANEL_COLORS['text_faint'] if muted else PANEL_COLORS['text_dim'],
           midright=(middle.right - layout.s(10), middle.centery))
-
 
 def _draw_analysis(screen, layout, ui):
     """The ranked hint lines, one row each, with the score the search returned.
@@ -689,7 +629,6 @@ def _draw_analysis(screen, layout, ui):
         _text(screen, format_score(score), score_font, PANEL_COLORS['text_dim'],
               midright=(row.right - layout.s(6), row.centery))
 
-
 def _move_text(move):
     """Move list notation. Drops read `N@a6`, matching main.Game.notation."""
     if not move:
@@ -699,7 +638,6 @@ def _move_text(move):
     start, end, promotion = move
     text = f"{coords_to_algebraic(*start)}{coords_to_algebraic(*end)}"
     return text + (f"={promotion.upper()}" if promotion else "")
-
 
 def _draw_movelist(screen, layout, ui, hits):
     area = layout.movelist
@@ -741,7 +679,7 @@ def _draw_movelist(screen, layout, ui, hits):
         for half, move in ((0, white_move), (1, black_move)):
             if move is None:
                 continue
-            ply = ply_index + half + 1      # ply N == the position after N moves
+            ply = ply_index + half + 1
             cell = pygame.Rect(body.x + num_w + half * cell_w, y, cell_w, row_h)
             if ply == ui.view_ply:
                 pygame.draw.rect(screen, PANEL_COLORS['accent'], cell, border_radius=layout.s(3))
@@ -762,7 +700,6 @@ def _draw_movelist(screen, layout, ui, hits):
         _text(screen, "no moves yet", get_font(layout.font_size(12)), PANEL_COLORS['text_faint'],
               center=(body.centerx, body.y + row_h))
     elif len(pairs) > rows:
-        # Scroll indicator: proportional thumb on the right edge.
         track = pygame.Rect(area.right - layout.s(6), body.y, layout.s(3), body.h)
         pygame.draw.rect(screen, PANEL_COLORS['border'], track, border_radius=layout.s(2))
         thumb_h = max(layout.s(16), int(track.h * rows / len(pairs)))
@@ -770,7 +707,6 @@ def _draw_movelist(screen, layout, ui, hits):
         pygame.draw.rect(screen, PANEL_COLORS['text_faint'],
                          pygame.Rect(track.x, thumb_y, track.w, thumb_h), border_radius=layout.s(2))
     _ = previous
-
 
 def _draw_toast(screen, layout, ui):
     """Bottom band. Height is reserved even when empty so nothing above shifts."""
@@ -792,7 +728,6 @@ def _draw_toast(screen, layout, ui):
         _text(screen, _clip_text(lines[1], small, inner_w), small, PANEL_COLORS['text_dim'],
               midleft=(area.x + layout.s(12), area.y + 2 * area.h // 3))
 
-
 def draw_panel(screen, layout, view, ui, hits):
     pygame.draw.rect(screen, PANEL_COLORS['bg'], layout.panel)
     pygame.draw.line(screen, PANEL_COLORS['border'],
@@ -802,9 +737,6 @@ def draw_panel(screen, layout, view, ui, hits):
     _draw_analysis(screen, layout, ui)
     _draw_movelist(screen, layout, ui, hits)
     _draw_toast(screen, layout, ui)
-
-
-# --- Overlays ----------------------------------------------------------------
 
 def draw_promotion(screen, layout, view, hits):
     """Modal promotion picker.
@@ -858,7 +790,6 @@ def draw_promotion(screen, layout, view, hits):
     _text(screen, "click, or press R / N / B", get_font(layout.font_size(12)),
           PANEL_COLORS['text_faint'], center=(box.centerx, box.bottom - layout.s(15)))
 
-
 def draw_game_over(screen, layout, view, ui, hits):
     """Banner across the board. The old build only whispered this in the panel."""
     banner_h = layout.s(96)
@@ -879,9 +810,6 @@ def draw_game_over(screen, layout, view, ui, hits):
     draw_button(screen, layout, button, "New game", bg=HIGHLIGHT_COLORS['new_game'],
                 hovered=button.collidepoint(ui.mouse_pos))
     hits['buttons']['new_game'] = button
-
-
-# --- Frame -------------------------------------------------------------------
 
 def draw_frame(screen, layout, view, ui):
     """Render one frame. Returns the hit-test map for this frame's geometry.
@@ -904,8 +832,6 @@ def draw_frame(screen, layout, view, ui):
     if view.result_title and not view.needs_promotion:
         draw_game_over(screen, layout, view, ui, hits)
     if view.needs_promotion:
-        # Modal: drop every hit region collected so far so nothing underneath is
-        # clickable while the picker is up.
         hits = {'buttons': {}, 'hand': {}, 'promotion': {}, 'movelist': {}, 'wheel': {}}
         draw_promotion(screen, layout, view, hits)
 

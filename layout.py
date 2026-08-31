@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Window geometry for the Pygame front end.
 
 Everything the GUI draws is positioned from a `Layout` recomputed from the current
@@ -25,25 +24,18 @@ import pygame
 
 from config import BOARD_SIZE
 
-# Refuse to shrink past the point where the board stops being clickable.
 MIN_WIN_W = 760
 MIN_WIN_H = 500
 
-# Window size used the very first time, before settings.json exists. Clamped to
-# the actual desktop at startup (see main.initial_window_size).
 DEFAULT_WIN_W = 1100
 DEFAULT_WIN_H = 740
 
-# Board squares plus the two hand strips, expressed in squares. The strips are
-# 0.52 squares tall with a 0.06 square gap on each side of the board.
 _HAND_H_RATIO = 0.52
 _HAND_GAP_RATIO = 0.06
 _VERTICAL_SQUARES = BOARD_SIZE + 2 * _HAND_H_RATIO + 2 * _HAND_GAP_RATIO
 
-
 def clamp(value, low, high):
     return max(low, min(high, value))
-
 
 class Layout:
     """Immutable geometry for one window size. Recreate it on resize."""
@@ -52,14 +44,11 @@ class Layout:
         self.win_w = win_w = max(MIN_WIN_W, int(win_w))
         self.win_h = win_h = max(MIN_WIN_H, int(win_h))
 
-        # Global chrome scale: fonts, paddings, border radii. Independent of the
-        # square size so text stays readable on a wide-but-short window.
         self.k = clamp(min(win_w / 1100.0, win_h / 740.0), 0.72, 2.0)
 
         self.margin = m = self.s(14)
         self.panel_w = int(clamp(win_w * 0.30, self.s(280), self.s(420)))
 
-        # --- Board + hand strips occupy the left column ---
         col_w = win_w - self.panel_w - 2 * m
         col_h = win_h - 2 * m
 
@@ -76,7 +65,6 @@ class Layout:
         self.board = pygame.Rect(col_x, col_y + hand_h + gap, board_px, board_px)
         self.hand_bottom = pygame.Rect(col_x, self.board.bottom + gap, board_px, hand_h)
 
-        # --- Side panel, pinned to the right edge ---
         self.panel = pygame.Rect(win_w - self.panel_w, 0, self.panel_w, win_h)
         pad = self.s(14)
         self.panel_pad = pad
@@ -87,18 +75,13 @@ class Layout:
         self.btn_gap = btn_gap = self.s(7)
         self.row_h = self.s(22)
 
-        # Header: title, turn row, eval row, engine-status row.
         self.eval_h = eval_h = self.s(30)
         header_h = self.s(26) + self.s(34) + eval_h + self.s(30) + 4 * self.s(6)
         self.header = pygame.Rect(inner_x, pad, inner_w, header_h)
 
-        # Controls: 7 button rows. Fixed height, so the move list below can never
-        # push them and they can never push it.
         controls_h = 7 * btn_h + 6 * btn_gap
         self.controls = pygame.Rect(inner_x, self.header.bottom + self.s(10), inner_w, controls_h)
 
-        # Analysis band: one row per requested hint line, plus a header. Zero rows
-        # collapses it to nothing so the move list gets the pixels back.
         self.analysis_rows = max(0, int(analysis_rows))
         self.analysis_row_h = self.s(22)
         analysis_h = (self.s(22) + self.analysis_rows * self.analysis_row_h + self.s(8)
@@ -106,18 +89,13 @@ class Layout:
         self.analysis = pygame.Rect(inner_x, self.controls.bottom + self.s(10),
                                     inner_w, analysis_h)
 
-        # Toast / status band, pinned to the bottom edge and always reserved even
-        # when empty — otherwise the move list would resize as messages come and go.
         self.toast_h = toast_h = self.s(46)
         self.toast = pygame.Rect(inner_x, win_h - pad - toast_h, inner_w, toast_h)
 
-        # Move list absorbs every remaining pixel.
         list_top = (self.analysis.bottom if analysis_h else self.controls.bottom) + self.s(10)
         self.movelist = pygame.Rect(inner_x, list_top, inner_w,
                                     max(self.s(40), self.toast.top - self.s(10) - list_top))
         self.movelist_row_h = self.s(21)
-
-    # --- helpers -----------------------------------------------------------
 
     def s(self, value):
         """Scale a design-pixel value (authored at k == 1.0) to this window."""

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Regenerate bench/positions.json.
 
@@ -27,20 +26,18 @@ REPO_ROOT = os.path.dirname(BENCH_DIR)
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, BENCH_DIR)
 
-from positions import encode_move, POSITIONS_JSON  # noqa: E402
+from positions import encode_move, POSITIONS_JSON
 
-GEN_DEPTH = 5          # depth used to walk a game forward; low and fast
-MIN_LEGAL_MOVES = 8    # below this, find_best_move short-circuits and measures nothing
+GEN_DEPTH = 5
+MIN_LEGAL_MOVES = 8
 
 PIECE_VALUES = {"P": 1, "N": 3, "B": 3, "R": 5, "Q": 9, "K": 0}
-
 
 def fresh_state():
     from gamestate import GameState
     gs = GameState()
     gs.setup_initial_board()
     return gs
-
 
 def engine_move(gs, depth=GEN_DEPTH):
     import ai
@@ -49,14 +46,11 @@ def engine_move(gs, depth=GEN_DEPTH):
     move, _score = rs.find_best_move_with_score(rust_gs, depth, None, False)
     return move
 
-
 def play(gs, move):
     if not gs.make_move(move):
         raise RuntimeError("generator produced an illegal move: %r" % (move,))
     if gs.needs_promotion_choice:
-        # Should not happen: generated moves carry their promotion piece.
         raise RuntimeError("unexpected pending promotion after %r" % (move,))
-
 
 def describe(gs):
     """Material / phase summary, also stored as position metadata."""
@@ -78,24 +72,15 @@ def describe(gs):
         "game_over": bool(gs.checkmate or gs.stalemate or gs.is_draw),
     }
 
-
-# --- selection criteria -----------------------------------------------------
-
 def usable(info):
     return info["legal_moves"] >= MIN_LEGAL_MOVES and not info["game_over"]
 
-
 CRITERIA = {
-    # deepest usable ply, no further constraint
     "any": lambda info: True,
-    # side to move is in check: forced, sharp, tactical
     "check": lambda info: info["in_check"],
-    # thin board, material parked in the hands -> crazyhouse endgame
     "endgame": lambda info: info["pieces_on_board"] <= 4 and info["pieces_in_hand"] >= 3,
-    # both sides still developed, some drop material available
     "hand": lambda info: info["pieces_in_hand"] >= 2 and info["pieces_on_board"] >= 5,
 }
-
 
 def walk(deviations, max_ply):
     """
@@ -120,7 +105,6 @@ def walk(deviations, max_ply):
         snapshots.append((list(moves), describe(gs)))
     return snapshots
 
-
 def pick(snapshots, criterion, min_ply=0):
     """Deepest snapshot at or past min_ply that is usable and matches criterion."""
     test = CRITERIA[criterion]
@@ -132,8 +116,6 @@ def pick(snapshots, criterion, min_ply=0):
         return None, None
     return max(candidates, key=lambda pair: len(pair[0]))
 
-
-# name, deviations, max_ply, min_ply, criterion, phase label
 SPECS = [
     ("opening_start",       {},                  0,  0, "any",     "opening"),
     ("opening_early",       {0: 3, 1: 2},        6,  6, "any",     "opening"),
@@ -144,7 +126,6 @@ SPECS = [
     ("endgame_thin_a",      {0: 0, 1: 1},       30, 12, "endgame", "endgame, thin board with drop material"),
     ("endgame_thin_b",      {0: 5, 1: 1, 2: 3}, 30, 12, "endgame", "endgame, thin board with drop material"),
 ]
-
 
 def main():
     out = []
@@ -187,7 +168,6 @@ def main():
             indent=2,
         )
     sys.stderr.write("wrote %s (%d positions)\n" % (POSITIONS_JSON, len(out)))
-
 
 if __name__ == "__main__":
     main()

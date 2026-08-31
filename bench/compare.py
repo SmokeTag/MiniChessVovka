@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Compare two run_bench.py results files: sequential vs root-parallel.
 
@@ -24,12 +23,10 @@ import sys
 
 BAR = "=" * 100
 
-
 def load(path):
     with open(path) as fh:
         data = json.load(fh)
     return data.get("header", {}), data.get("results", [])
-
 
 def collect(files):
     """
@@ -54,7 +51,6 @@ def collect(files):
                 cells[key] = cell
     return cells, duplicates
 
-
 def fmt_split(cell):
     splits = cell.get("parallel_splits") or []
     if not splits:
@@ -63,7 +59,6 @@ def fmt_split(cell):
     return "b%.2f/s%.2f(%d)/r%.2f(%d)" % (
         s["baseline_s"], s["scout_s"], s["scout_moves"],
         s["research_s"], s["research_moves"])
-
 
 def classify(seq, par):
     """-> (status, note). status in ok / alt / DISAGREE."""
@@ -75,7 +70,6 @@ def classify(seq, par):
         return "alt", "different move, equal score %s" % seq["score"]
     return "DISAGREE", "%s(%s) -> %s(%s)" % (
         seq["best_move_str"], seq["score"], par["best_move_str"], par["score"])
-
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
@@ -148,7 +142,6 @@ def main():
                  "-" if dscore is None else str(dscore),
                  status, flag, fmt_split(par)))
 
-    # ---- per-depth aggregate ------------------------------------------------
     print()
     print("per-depth totals (sum of minimums across positions)")
     print("%2s %6s %10s %10s %8s %10s %s"
@@ -175,7 +168,6 @@ def main():
                  seq_total / par_total if par_total else float("nan"),
                  agree, len(rows), avg))
 
-    # ---- verdict ------------------------------------------------------------
     print()
     if disagreements:
         print("!" * len(BAR))
@@ -207,7 +199,6 @@ def main():
               % (sorted(set(seq_only)) or "none", sorted(set(par_only)) or "none"))
 
     return 1 if disagreements else 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

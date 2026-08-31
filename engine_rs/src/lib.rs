@@ -16,23 +16,14 @@ use std::sync::Mutex;
 use types::*;
 use gamestate::GameState as RustGameState;
 
-// The opening book, process-global and thread-safe.
 lazy_static::lazy_static! {
     static ref BOOK: Mutex<cache::Book> = Mutex::new(HashMap::new());
-    /// Position hashes written since the last save. Lets save_move_cache_to_db push only
-    /// the new entries instead of rewriting the whole book — see cache::save_book_entries.
     static ref DIRTY_KEYS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    /// Hashes known to have a row in `book_move` on disk: everything `load_book` read,
-    /// plus everything `save_book_position` has written this session. The in-memory book
-    /// cannot answer this on its own once the analysis cache is loaded into it — both
-    /// stores share one map, and only the table a row came from says which it is.
     static ref BOOK_HASHES: Mutex<std::collections::HashSet<String>> =
         Mutex::new(std::collections::HashSet::new());
 }
 
-/// Convert a Python move tuple to our internal Move
 fn py_move_to_rust(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Move> {
-    // Check if it's a drop: ('drop', 'wN', (r, f))
     if let Ok(tup) = obj.downcast::<PyTuple>() {
         if tup.len() >= 1 {
             if let Ok(first) = tup.get_item(0)?.extract::<String>() {
@@ -59,7 +50,6 @@ fn py_move_to_rust(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Move> {
                     return Ok(Move::new_drop(sq(r, f), pt, color));
                 }
             }
-            // Normal move: ((r1,f1), (r2,f2), promotion)
             if tup.len() >= 3 {
                 let from = tup.get_item(0)?;
                 let from = from.downcast::<PyTuple>()?;
@@ -91,7 +81,6 @@ fn py_move_to_rust(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Move> {
     Err(PyValueError::new_err("Cannot parse move"))
 }
 
-/// Convert our internal Move to a Python tuple
 fn rust_move_to_py(py: Python<'_>, m: Move) -> PyObject {
     if m.is_null() {
         return py.None();
@@ -126,11 +115,6 @@ fn rust_move_to_py(py: Python<'_>, m: Move) -> PyObject {
         let to_tup = PyTuple::new(py, &[sq_row(to), sq_file(to)]).unwrap();
         let promo: PyObject = match m.promotion() {
             Some(pt) => {
-                // Case encodes colour everywhere else in this codebase (board chars,
-                // 'wN'/'bN' drop codes), and gamestate.py validates promotion chars
-                // case-sensitively against PROMOTION_PIECES_WHITE_STR/_BLACK_STR.
-                // Move carries no colour, but the destination rank is unambiguous:
-                // White promotes on row 0, Black on the last row.
                 let white = sq_row(to) == 0;
                 let c = match (pt, white) {
                     (PieceType::Rook, true) => "R",
@@ -156,7 +140,6 @@ fn rust_move_to_py(py: Python<'_>, m: Move) -> PyObject {
 #[pyclass(name = "GameState")]
 pub struct PyGameState {
     inner: RustGameState,
-    // Store extra Python-compatible fields
     #[pyo3(get, set)]
     white_ai_enabled: bool,
     #[pyo3(get, set)]
@@ -171,7 +154,6 @@ pub struct PyGameState {
     selected_drop_piece: Option<String>,
     #[pyo3(get, set)]
     highlighted_moves: PyObject,
-    // For undo (simplified: just track states)
     saved_states_count: usize,
 }
 
@@ -306,7 +288,6 @@ impl PyGameState {
         self.saved_states_count = 0;
     }
 
-    // Properties
     #[getter]
     fn board<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let mut rows = Vec::with_capacity(BOARD_SIZE);
@@ -448,8 +429,6 @@ impl PyGameState {
     #[getter]
     fn ply(&self) -> u32 { self.inner.ply }
 
-    /// Settable because `ai._sync_to_rust` builds a fresh Rust state per search: without
-    /// this, every book row would claim the position first occurs at ply 0.
     #[setter]
     fn set_ply(&mut self, v: u32) { self.inner.ply = v; }
 
@@ -459,7 +438,6 @@ impl PyGameState {
     #[setter]
     fn set_ply_limit(&mut self, v: u32) { self.inner.ply_limit = v; }
 
-    /// How many times the current position has occurred in this game.
     fn repetition_count(&self) -> usize { self.inner.repetition_count() }
 
     #[getter]
@@ -499,18 +477,12 @@ impl PyGameState {
             let f: usize = tup.get_item(1)?.extract()?;
             self.inner.promoted_pieces |= 1u64 << sq(r, f);
         }
-        // Promoted squares are hashed (zobrist::get_position_hash), so skipping this
-        // left every position synced from Python with a promoted piece carrying a hash
-        // that ignored it -- and the book is keyed by that hash. Caught by
-        // tests/test_fen.py: the FEN written beside such an entry did not hash back to
-        // the row it belonged to.
         self.inner.hash = self.inner.compute_hash();
         Ok(())
     }
 
     #[getter]
     fn move_log<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        // Return empty list (move_log is tracked in Python frontends)
         Ok(PyList::empty(py))
     }
 
@@ -521,7 +493,6 @@ impl PyGameState {
 
     #[getter]
     fn saved_states<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        // Return dummy list with correct length for undo logic
         let items: Vec<i32> = (0..self.saved_states_count as i32).collect();
         Ok(PyList::new(py, &items)?)
     }
@@ -532,10 +503,9 @@ impl PyGameState {
         Ok(PyList::new(py, &items)?)
     }
 
-    // Extra getters that Python code accesses
     #[getter]
     fn _all_legal_moves_cache(&self) -> Option<bool> {
-        None  // Always return None to match Python behavior
+        None
     }
 
     #[setter]
@@ -556,22 +526,12 @@ impl PyGameState {
     fn set__is_check_cache(&mut self, _v: Option<bool>) {}
 }
 
-// Module-level AI functions
-
-/// `return_top_n == 1` gives back the bare move tuple, as the GUI, the bot and the
-/// training scripts all expect. Anything higher gives back a list of `(move, score)`
-/// ranked best-first for the side to move, and asks the engine for a MultiPV search so
-/// those scores are real values rather than alpha-beta bounds — this is the call that
-/// `self_play.choose_move_with_exploration` has always made and never got a second move
-/// out of.
 #[pyfunction]
 #[pyo3(signature = (gs, depth=None, return_top_n=None, time_limit=None, parallel=None))]
 fn find_best_move(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, return_top_n: Option<i32>, time_limit: Option<f64>, parallel: Option<bool>) -> PyResult<PyObject> {
     let d = depth.unwrap_or(6);
     let top_n = return_top_n.unwrap_or(1);
 
-    // `&BOOK`, not a guard: the search locks the book only for its probe and its single
-    // store, so several searches -- and the GUI's own book queries -- run side by side.
     let ranked = py.allow_threads(|| {
         let mut dirty = Vec::new();
         let res = search::find_best_move(&mut gs.inner, d, top_n, &BOOK, &mut dirty, time_limit, parallel);
@@ -595,10 +555,6 @@ fn find_best_move(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, retu
     Ok(list.into())
 }
 
-/// The single-PV search plus its score, without asking for a second rank.
-///
-/// `bench/` wants exactly this: `return_top_n=2` would report a score, but it would also
-/// switch the engine into MultiPV and stop measuring the path training actually runs.
 #[pyfunction]
 #[pyo3(signature = (gs, depth=None, time_limit=None, parallel=None))]
 fn find_best_move_with_score(py: Python<'_>, gs: &mut PyGameState, depth: Option<i32>, time_limit: Option<f64>, parallel: Option<bool>) -> PyResult<PyObject> {
@@ -617,15 +573,12 @@ fn find_best_move_with_score(py: Python<'_>, gs: &mut PyGameState, depth: Option
     Ok(tup.into())
 }
 
-/// Turn the root-level parallel search on or off for this process.
-/// Off by default, which keeps self-play training single-threaded.
 #[pyfunction]
 #[pyo3(signature = (enabled, min_depth=None))]
 fn set_parallel_search(enabled: bool, min_depth: Option<i32>) {
     search::set_parallel_search(enabled, min_depth);
 }
 
-/// Returns (enabled, min_depth) for the root-level parallel search.
 #[pyfunction]
 fn get_parallel_search(py: Python<'_>) -> PyResult<PyObject> {
     let (enabled, min_depth) = search::parallel_search_config();
@@ -646,35 +599,15 @@ fn get_position_hash(gs: &PyGameState) -> String {
     gs.inner.hash.to_string()
 }
 
-/// Loads the book from disk into this process. Names kept for API compatibility.
 #[pyfunction]
 fn load_move_cache_from_db() {
     let loaded = cache::load_book();
     *BOOK_HASHES.lock().unwrap() = loaded.keys().cloned().collect();
     let mut book = BOOK.lock().unwrap();
     *book = loaded;
-    // Everything just loaded is already on disk.
     DIRTY_KEYS.lock().unwrap().clear();
 }
 
-/// Whether a cached analysis entry should replace the book entry sitting on its hash.
-///
-/// **The book decides what the engine plays, and this cannot change that.** The only
-/// entry allowed through is one that names the *same rank-1 move* under the *same*
-/// `eval_version` and carries strictly more evidence for it — deeper, or more ranks, and
-/// never less of either. So the move is identical before and after; all that changes is
-/// how many questions `probe_book` can answer from it.
-///
-/// That is not a nicety. The book builder files rank 1 only (MultiPV costs 2.4-4.4x, see
-/// CLAUDE.md), so a 1-rank book row shadowed the 4-rank row the GUI had just spent a
-/// depth-10 MultiPV search producing — and `probe_book` rejects an entry holding fewer
-/// ranks than the caller asked for. The result was a hint at 4 lines re-searching the
-/// initial position on **every** launch, with the answer it wanted sitting in
-/// `analysis_move` the whole time, correct, and discarded at load.
-///
-/// Entries are taken whole, never spliced. Ranks 2.. come from one MultiPV pass at the
-/// final depth and only mean anything together; grafting another search's ranks onto
-/// this one's rank 1 would file scores no search ever produced.
 fn analysis_supersedes(cached: &cache::BookEntry, book: &cache::BookEntry) -> bool {
     let (Some(new1), Some(old1)) = (cached.moves.first(), book.moves.first()) else {
         return false;
@@ -686,20 +619,6 @@ fn analysis_supersedes(cached: &cache::BookEntry, book: &cache::BookEntry) -> bo
         && (new1.depth > old1.depth || cached.moves.len() > book.moves.len())
 }
 
-/// Merges the analysis cache into the in-memory book, and returns how many entries it
-/// added or improved.
-///
-/// **The book wins every collision it is not strictly beaten on.** A curated row and a
-/// row from someone poking at a position are not interchangeable, and a probe cannot
-/// tell them apart once they are in the same map — so the repertoire's answer survives
-/// unless the cached one is the same answer with more behind it. See
-/// [`analysis_supersedes`] for exactly what that means and why the exception exists.
-///
-/// Loading this is what makes the cache worth having: `probe_book` reads the one map, so
-/// a position analysed in an earlier session comes back as a hit instead of a re-search.
-/// It also means the engine will *play* from cached analysis, which is why nothing loads
-/// it implicitly — `build_book.py` and the bot call `load_move_cache_from_db` alone and
-/// see the book exactly as they always did.
 #[pyfunction]
 fn load_analysis_from_db() -> usize {
     let cached = cache::load_store(cache::Store::Analysis);
@@ -727,21 +646,10 @@ fn load_analysis_from_db() -> usize {
             if deepened == 1 { "y" } else { "ies" }
         );
     }
-    // Loaded, therefore already on disk: not pending.
     DIRTY_KEYS.lock().unwrap().clear();
     added + deepened
 }
 
-/// Flushes every position searched since the last flush into the analysis tables.
-///
-/// This is the bulk write the book deliberately no longer gets. Everything a session
-/// searched belongs in the cache — that is what a cache is — and nothing here can reach
-/// `book_move`, which only `save_book_position` writes.
-///
-/// Runs under `allow_threads`: this is the one book call the GUI makes on its own event
-/// loop after every search lands, and it holds both the book lock and a SQLite write
-/// transaction. Holding the GIL across that stalls the whole UI and, worse, stalls it
-/// behind a lock a background hint wants for its store.
 #[pyfunction]
 fn save_analysis_to_db(py: Python<'_>) -> PyResult<usize> {
     py.allow_threads(|| {
@@ -758,23 +666,16 @@ fn save_analysis_to_db(py: Python<'_>) -> PyResult<usize> {
     })
 }
 
-/// Drops the analysis tables and recreates them empty. The book is untouched.
 #[pyfunction]
 fn rebuild_analysis() -> PyResult<()> {
     cache::rebuild_analysis().map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
-/// Whether this position already has a row in `book_move` on disk.
 #[pyfunction]
 fn book_has_row(gs: &PyGameState) -> bool {
     BOOK_HASHES.lock().unwrap().contains(&gs.inner.hash.to_string())
 }
 
-/// Writes the positions searched since the last save.
-///
-/// Raises rather than swallowing a failure: on a schema mismatch the rows are still in
-/// memory and `dirty` is left intact, so a worker stops with its work recoverable
-/// instead of quietly dropping every search it has done.
 #[pyfunction]
 #[pyo3(signature = (_cache_arg=None))]
 fn save_move_cache_to_db(py: Python<'_>, _cache_arg: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
@@ -791,18 +692,6 @@ fn save_move_cache_to_db(py: Python<'_>, _cache_arg: Option<&Bound<'_, PyAny>>) 
     })
 }
 
-/// Writes **one** position's book entry, named by the caller, and nothing else.
-///
-/// This is the deliberate counterpart to `save_move_cache_to_db`, which flushes every
-/// hash queued since the last save. A GUI session searches whatever the user happens to
-/// look at -- hints, engine replies, idle exploration -- and a bulk flush cannot tell
-/// any of that apart from a line the user actually wants in the repertoire. The book is
-/// a curated artefact, so filing a row into it is an explicit act: the caller names the
-/// position and gets back whether there was anything to write.
-///
-/// Returns `false` when this process has no searched entry for the position -- nothing
-/// was written, and that is not an error. Loading the book does not count: entries read
-/// from disk are already there, and carry no FEN to write a `position` row from.
 #[pyfunction]
 fn save_book_position(gs: &PyGameState) -> PyResult<bool> {
     let hash = gs.inner.hash.to_string();
@@ -811,11 +700,6 @@ fn save_book_position(gs: &PyGameState) -> PyResult<bool> {
         return Ok(false);
     };
 
-    // Entries that came off disk carry no FEN -- neither load reads the positions table,
-    // because the hot path has no use for one and 10k of them cost memory for nothing.
-    // Saving such an entry to the book without a FEN would file a hash that can never be
-    // turned back into a position, which is the exact defect that killed `move_cache`.
-    // The caller is *looking at* the position, so the FEN is free and authoritative here.
     if entry.fen.is_none() {
         entry.fen = Some(fen::to_fen(&gs.inner));
     }
@@ -826,24 +710,16 @@ fn save_book_position(gs: &PyGameState) -> PyResult<bool> {
     let book = &*book;
     cache::save_book_entries(book, std::slice::from_ref(&hash))
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    // No longer pending: the analysis flush must not also file it as exploration.
     DIRTY_KEYS.lock().unwrap().retain(|k| k != &hash);
     BOOK_HASHES.lock().unwrap().insert(hash);
     Ok(true)
 }
 
-/// Whether this process holds a searched book entry for `gs` -- i.e. whether
-/// `save_book_position` would write anything.
 #[pyfunction]
 fn book_has_position(gs: &PyGameState) -> bool {
     BOOK.lock().unwrap().contains_key(&gs.inner.hash.to_string())
 }
 
-/// How many searched positions are queued but not on disk.
-///
-/// The in-memory book is also the analysis cache, so this counts a session's exploration
-/// as well as anything worth keeping. It exists so a front end can say what it is sitting
-/// on rather than leaving the user to guess.
 #[pyfunction]
 fn pending_book_writes() -> usize {
     let dirty = DIRTY_KEYS.lock().unwrap();
@@ -851,10 +727,6 @@ fn pending_book_writes() -> usize {
     unique.len()
 }
 
-/// Drops the queue of unsaved positions without writing them.
-///
-/// The entries stay in the in-memory book, so they are still cache hits for the rest of
-/// the session; they simply stop being candidates for a bulk flush.
 #[pyfunction]
 fn discard_pending_book_writes() -> usize {
     let mut dirty = DIRTY_KEYS.lock().unwrap();
@@ -863,34 +735,26 @@ fn discard_pending_book_writes() -> usize {
     n
 }
 
-/// Creates the book schema if it is absent. Raises on a foreign schema; never drops.
 #[pyfunction]
 fn setup_db() -> PyResult<()> {
     cache::setup_db().map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
-/// Drops both book tables and recreates them at the current SCHEMA_VERSION.
-///
-/// Destructive and deliberately unreachable by accident: nothing in the engine calls
-/// this. `rebuild_book.py` is the front door, and it asks first.
 #[pyfunction]
 fn rebuild_book() -> PyResult<()> {
     cache::rebuild_db().map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
-/// Number of positions the in-memory book holds.
 #[pyfunction]
 fn book_size() -> usize {
     BOOK.lock().unwrap().len()
 }
 
-/// Serialize a position to minihouse FEN. See `engine_rs/src/fen.rs` for the format.
 #[pyfunction]
 fn to_fen(gs: &PyGameState) -> String {
     fen::to_fen(&gs.inner)
 }
 
-/// Parse a minihouse FEN into a fresh GameState. Raises ValueError on malformed input.
 #[pyfunction]
 fn from_fen(py: Python<'_>, s: &str) -> PyResult<PyGameState> {
     let inner = fen::from_fen(s).map_err(PyValueError::new_err)?;
@@ -942,7 +806,6 @@ fn minichess_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(is_move_still_legal, m)?)?;
     m.add_function(wrap_pyfunction!(parse_move_string, m)?)?;
     
-    // Re-export constants needed by Python
     m.add("CHECKMATE_SCORE", eval::CHECKMATE_SCORE)?;
     m.add("STALEMATE_SCORE", eval::STALEMATE_SCORE)?;
     m.add("BOARD_SIZE", BOARD_SIZE)?;

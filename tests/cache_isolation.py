@@ -25,7 +25,6 @@ sys.path.insert(0, REPO_ROOT)
 
 import ai
 
-
 @contextlib.contextmanager
 def isolated_cache_db():
     """Run the block in a throwaway CWD, so it gets its own book.db."""
@@ -33,8 +32,6 @@ def isolated_cache_db():
     tmp_dir = tempfile.mkdtemp(prefix="minichess-cache-test-")
     try:
         os.chdir(tmp_dir)
-        # Fail loudly rather than fall back to touching the real cache if the
-        # chdir ever stops taking effect.
         if os.path.realpath(os.getcwd()) == os.path.realpath(REPO_ROOT):
             raise RuntimeError(
                 "cache tests must not run in the repo root -- they drop the book tables"
@@ -43,13 +40,7 @@ def isolated_cache_db():
     finally:
         os.chdir(prev_cwd)
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        # The Rust book is process-global: the block leaves it holding only its
-        # own scratch rows. Reload the real book so a later test in the same
-        # pytest session does not write that scratch state back over the
-        # repo-root DB. The reload is read-only (cache::load_book), so it cannot
-        # create or rebuild the live book.db either.
         ai.load_move_cache_from_db()
-
 
 class IsolatedCacheDB(unittest.TestCase):
     """TestCase base that wraps every test in `isolated_cache_db()`."""

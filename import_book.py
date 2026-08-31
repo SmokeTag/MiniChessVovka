@@ -57,7 +57,6 @@ STORES = {"book": ("book_move", "position"), "analysis": ("analysis_move", "anal
 
 Row = collections.namedtuple("Row", "fen ply rank move score depth eval_version")
 
-
 def parse(path):
     """Read the dump. Returns (rows, header dict). Raises ValueError on a bad line."""
     rows, header = [], {}
@@ -82,7 +81,6 @@ def parse(path):
                 raise ValueError("%s:%d: %s" % (path, lineno, e))
     return rows, header
 
-
 def resolve(rows, engine):
     """FEN -> hash for every distinct FEN, verifying each one. Returns (map, problems)."""
     by_fen = {}
@@ -98,8 +96,6 @@ def resolve(rows, engine):
             continue
         back = engine.to_fen(gs)
         if back != r.fen:
-            # fen.rs carries exactly what the hash reads, so a FEN that does not
-            # round-trip would hash as something other than what the line claims.
             problems.append("FEN does not round-trip: %r -> %r" % (r.fen, back))
             continue
         h = engine.get_position_hash(gs)
@@ -110,7 +106,6 @@ def resolve(rows, engine):
         seen_hash[h] = r.fen
         by_fen[r.fen] = h
     return by_fen, problems
-
 
 def min_ply(rows):
     """Lowest ply seen per FEN -- how early the position can actually appear."""
@@ -123,7 +118,6 @@ def min_ply(rows):
         out[r.fen] = r.ply if cur is None else min(cur, r.ply)
     return out
 
-
 def write(conn, rows, by_fen, plies, store, merge):
     moves_t, pos_t = STORES[store]
     conn.execute("PRAGMA foreign_keys = ON")
@@ -131,7 +125,6 @@ def write(conn, rows, by_fen, plies, store, merge):
     inserted = skipped_deeper = 0
     try:
         if not merge:
-            # Child first: the foreign key forbids clearing parents out from under it.
             conn.execute("DELETE FROM %s" % moves_t)
             conn.execute("DELETE FROM %s" % pos_t)
 
@@ -140,8 +133,6 @@ def write(conn, rows, by_fen, plies, store, merge):
             for h, rk, d in conn.execute("SELECT hash, rank, depth FROM %s" % moves_t):
                 existing[(h, rk)] = d
 
-        # Parents before children -- the foreign key makes this a precondition, not a
-        # preference. `ply` reconciles to the minimum, matching cache::write_position.
         for fen, h in by_fen.items():
             ply = plies.get(fen)
             cur = conn.execute("SELECT ply FROM %s WHERE hash = ?" % pos_t, (h,)).fetchone()
@@ -173,7 +164,6 @@ def write(conn, rows, by_fen, plies, store, merge):
         conn.execute("ROLLBACK")
         raise
     return inserted, skipped_deeper
-
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -266,7 +256,6 @@ def main():
         return 0
     finally:
         conn.close()
-
 
 if __name__ == "__main__":
     sys.exit(main())

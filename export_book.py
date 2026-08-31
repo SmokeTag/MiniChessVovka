@@ -64,14 +64,11 @@ sys.path.insert(0, REPO_ROOT)
 DB_PATH = "book.db"
 DEFAULT_OUT = "book.tsv"
 
-# Bumped if the columns below change. Independent of the DB's SCHEMA_VERSION: the point
-# of this file is to outlive schema changes.
 FORMAT_VERSION = 1
 
 STORES = {"book": ("book_move", "position"), "analysis": ("analysis_move", "analysis_position")}
 
 COLUMNS = ("fen", "ply", "rank", "move", "score", "depth", "eval_version")
-
 
 def export(db_path, store, out_path):
     moves, positions = STORES[store]
@@ -95,8 +92,6 @@ def export(db_path, store, out_path):
         conn.close()
 
     if orphans:
-        # Impossible under the version-2 foreign key, so this means the file predates it.
-        # Those rows cannot be exported: with no FEN there is no key to write them under.
         print("WARNING: %d %s row(s) have no %s row and cannot be exported -- their hash "
               "cannot be turned back into a position. Run migrate_book.py."
               % (orphans, moves, positions), file=sys.stderr)
@@ -122,7 +117,6 @@ def export(db_path, store, out_path):
     return {"rows": len(rows), "bytes": len(text.encode()), "eval_versions": evs,
             "childless": childless, "orphans": orphans}
 
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", default=DEFAULT_OUT, help="output path (default: %s)" % DEFAULT_OUT)
@@ -144,7 +138,6 @@ def main():
         print("%d position row(s) had no moves and were not exported -- they carry no "
               "searched work." % info["childless"])
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

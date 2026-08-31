@@ -18,7 +18,6 @@ def test_undo_reliability():
     original_hands = copy.deepcopy(gs.hands)
     original_turn = gs.current_turn
     
-    # Get a move
     moves = gs.get_all_legal_moves()
     if not moves:
         print("No moves to test!")
@@ -27,27 +26,21 @@ def test_undo_reliability():
     move = moves[0]
     print(f"Applying move: {move}")
     
-    # Apply
     gs.make_ai_move(move)
     
-    # Check something changed
     if gs.current_turn == original_turn:
         print("FAIL: Turn did not switch after make_ai_move")
         return False
         
-    # Undo
     print("Undoing move...")
     gs.undo_ai_move()
     
-    # Verify restoration
     if gs.current_turn != original_turn:
         print(f"FAIL: Turn not restored. Expected {original_turn}, got {gs.current_turn}")
         return False
         
     if gs.board != original_board:
         print("FAIL: Board not restored correctly")
-        # print(f"Original: {original_board}")
-        # print(f"Current:  {gs.board}")
         return False
         
     if gs.hands != original_hands:
@@ -63,7 +56,6 @@ def test_ai_search():
     gs.setup_initial_board()
     
     start_time = time.time()
-    # Depth 2 should be fast but exercise the recursion and parallel logic
     best_move = ai.find_best_move(gs, depth=2)
     duration = time.time() - start_time
     
@@ -72,7 +64,6 @@ def test_ai_search():
     
     assert best_move is not None, "AI did not return a move"
     print("PASS: AI found a move.")
-
 
 def test_ai_vs_ai_game():
     """Regression test: play 10 moves of AI vs AI and verify correctness."""
@@ -88,10 +79,8 @@ def test_ai_vs_ai_game():
             gs, 4, -float('inf'), float('inf'), is_max)
         
         if not best_move:
-            # Game may be over
             break
         
-        # Verify move is legal
         legal_moves = gs.get_all_legal_moves()
         assert best_move in legal_moves, f"Move {best_move} not in legal moves"
         
@@ -102,14 +91,11 @@ def test_ai_vs_ai_game():
         if gs.checkmate or gs.stalemate:
             break
     
-    # Verify game state is consistent
     assert gs.king_pos['w'] is not None, "White king missing"
     assert gs.king_pos['b'] is not None or gs.checkmate, "Black king missing without checkmate"
     
-    # Verify board is different from start (game progressed)
     assert gs.board != original_board, "Board unchanged after 10 moves"
     print("PASS: AI vs AI game completed correctly.")
-
 
 def test_search_speed():
     """Test that depth 6 completes in reasonable time after optimizations."""

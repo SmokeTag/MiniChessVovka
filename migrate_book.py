@@ -67,8 +67,6 @@ BACKUP_DIR = "backups"
 
 TARGET_VERSION = 2
 
-# (moves table, positions table). The analysis pair is migrated too: it is written by the
-# same code path as the book, so it can go wrong in the same way.
 PAIRS = (("book_move", "position"), ("analysis_move", "analysis_position"))
 
 MOVES_DDL = """CREATE TABLE %s (
@@ -82,12 +80,10 @@ MOVES_DDL = """CREATE TABLE %s (
             FOREIGN KEY (hash) REFERENCES %s(hash) ON DELETE CASCADE
         )"""
 
-
 def table_exists(conn, name):
     return conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
     ).fetchone() is not None
-
 
 def survey(conn):
     """Row counts and orphans per pair, for the plan and for --check."""
@@ -113,7 +109,6 @@ def survey(conn):
                     "orphans": orphans, "childless": childless})
     return out
 
-
 def already_migrated(conn):
     """True when every present move table already carries its foreign key."""
     for moves, _ in PAIRS:
@@ -125,7 +120,6 @@ def already_migrated(conn):
         if "FOREIGN KEY" not in sql.upper():
             return False
     return True
-
 
 def back_up():
     """A verified snapshot beside the file, before anything is touched."""
@@ -144,14 +138,9 @@ def back_up():
         src.close()
     return dest
 
-
 def migrate(conn, drop_orphans):
     """The 12-step rebuild, in one transaction, for every pair present."""
-    # Enforcement OFF for the swap: dropping a parent with it on cascades into children
-    # that are mid-copy. It goes back on for foreign_key_check below.
     conn.execute("PRAGMA foreign_keys = OFF")
-    # Keep RENAME literal. Without this SQLite rewrites references to the renamed table
-    # inside other schemas, which would undo the constraint we just wrote.
     conn.execute("PRAGMA legacy_alter_table = ON")
     conn.execute("BEGIN IMMEDIATE")
 
@@ -183,8 +172,6 @@ def migrate(conn, drop_orphans):
 
         conn.execute("PRAGMA user_version = %d" % TARGET_VERSION)
 
-        # The proof. Runs inside the transaction, so a violation rolls the whole thing
-        # back rather than leaving a file that claims version 2 and is not.
         conn.execute("PRAGMA foreign_keys = ON")
         bad = conn.execute("PRAGMA foreign_key_check").fetchall()
         if bad:
@@ -197,7 +184,6 @@ def migrate(conn, drop_orphans):
     finally:
         conn.execute("PRAGMA legacy_alter_table = OFF")
     return dropped
-
 
 def print_survey(rows):
     for r in rows:
@@ -217,7 +203,6 @@ def print_survey(rows):
                 print("        %s  (%d row(s))" % (h, n))
             if len(r["orphans"]) > 10:
                 print("        ... and %d more" % (len(r["orphans"]) - 10))
-
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -304,7 +289,6 @@ def main():
         return 0
     finally:
         conn.close()
-
 
 if __name__ == "__main__":
     sys.exit(main())

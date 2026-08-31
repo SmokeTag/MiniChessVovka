@@ -3,9 +3,9 @@ use rand::rngs::StdRng;
 use rand::{SeedableRng, RngCore};
 
 pub struct ZobristTables {
-    pub piece_square: [[u64; NUM_SQUARES]; 13], // indexed by Piece as u8
+    pub piece_square: [[u64; NUM_SQUARES]; 13],
     pub turn_black: u64,
-    pub hand: [[[u64; 8]; 5]; 2], // [color][piece_type][count]
+    pub hand: [[[u64; 8]; 5]; 2],
     pub promoted: [u64; NUM_SQUARES],
 }
 

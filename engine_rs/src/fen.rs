@@ -1,35 +1,7 @@
-//! FEN for 6x6 minihouse.
-//!
-//! There was no position serializer here before -- `bench/` stores positions as move
-//! lists precisely because of that -- but the opening book needs one: `book_move` is
-//! keyed by Zobrist hash, and a hash is one-way, so without a FEN alongside it a book
-//! row can never be turned back into a position to look at, re-search, or expand from.
-//!
-//! The format carries **exactly** what `zobrist::get_position_hash` reads and nothing
-//! else: board, side to move, both hands, and which squares hold promoted pieces. That
-//! equivalence is the point -- `from_fen(to_fen(gs))` must hash back to `gs.hash`, and
-//! `tests/test_fen.py` asserts it on random positions. Anything path-dependent (ply,
-//! repetition history, the last move) is deliberately *not* in here: it is not hashed,
-//! so two positions that differ only in it are one book entry. `position.ply` is a
-//! separate column for that reason.
-//!
-//! Shape (two space-separated fields, crazyhouse conventions at 6x6):
-//!
-//! ```text
-//! 2bnrk/5p/6/6/P5/KRNB2[] w        <- the initial position
-//! 2bnrk/5p/6/6/P5/KRNB2[Pn] b      <- hands in brackets: uppercase White, lowercase Black
-//! 2bnrk/5p/6/6/P5/KRN1R~1[] w      <- '~' marks a promoted piece
-//! ```
-//!
-//! Ranks run top row first (row 0 = rank 6), matching this engine's `(row, file)`
-//! coordinates, so no flip is involved -- see `utils.coords_to_algebraic` on the Python
-//! side for the same convention. There is no castling, en-passant, or move-counter
-//! field: this variant has none of them.
 
 use crate::gamestate::GameState;
 use crate::types::*;
 
-/// Hand order within the brackets. Fixed so one position has exactly one FEN.
 const HAND_ORDER: [(PieceType, char); 5] = [
     (PieceType::Pawn, 'P'),
     (PieceType::Knight, 'N'),
@@ -38,15 +10,8 @@ const HAND_ORDER: [(PieceType, char); 5] = [
     (PieceType::Queen, 'Q'),
 ];
 
-/// Largest hand count the format accepts.
-///
-/// `zobrist::get_position_hash` indexes its hand table with `count.min(7)`, so a hand of
-/// 8 and a hand of 7 collide by construction. A 6x6 minihouse side owns five pieces in
-/// total, so this is unreachable in a real game; rejecting it here keeps a hand-written
-/// FEN from silently becoming a different position than it reads as.
 const MAX_HAND_COUNT: u8 = 7;
 
-/// Serialize a position. The inverse of [`from_fen`].
 pub fn to_fen(gs: &GameState) -> String {
     let mut out = String::with_capacity(48);
 
@@ -97,11 +62,6 @@ pub fn to_fen(gs: &GameState) -> String {
     out
 }
 
-/// Parse a position. The inverse of [`to_fen`].
-///
-/// Returns a fully consistent `GameState`: kings located, hash computed, and the
-/// position recorded as the first entry of the repetition history. `ply` starts at 0 --
-/// the format does not carry it (see the module docs).
 pub fn from_fen(fen: &str) -> Result<GameState, String> {
     let mut fields = fen.split_whitespace();
     let placement = fields
@@ -114,7 +74,6 @@ pub fn from_fen(fen: &str) -> Result<GameState, String> {
         return Err(format!("unexpected trailing field in FEN: {:?}", extra));
     }
 
-    // Hands live in brackets glued to the end of the placement field.
     let (board_part, hand_part) = match placement.find('[') {
         Some(i) => {
             if !placement.ends_with(']') {
@@ -209,8 +168,6 @@ pub fn from_fen(fen: &str) -> Result<GameState, String> {
         other => return Err(format!("side to move must be 'w' or 'b', got {:?}", other)),
     };
 
-    // A position without both kings breaks check detection and every eval term that
-    // reads king_pos, so reject it here rather than let it search.
     for (color, piece) in [
         (Color::White, Piece::WhiteKing),
         (Color::Black, Piece::BlackKing),
@@ -221,7 +178,6 @@ pub fn from_fen(fen: &str) -> Result<GameState, String> {
         }
     }
 
-    // A promoted marker on an empty square would be a hash bit with nothing under it.
     for s in 0..NUM_SQUARES {
         if gs.promoted_pieces & (1u64 << s) != 0 && gs.board[s].is_empty() {
             return Err(format!("'~' marks empty square {}", s));
@@ -271,12 +227,12 @@ mod tests {
     fn malformed_input_is_rejected() {
         for bad in [
             "",
-            "6/6/6/6/6/6 w",                     // no kings
-            "bnrk2/5p/6/6/P5/KRNB2 x",           // bad side to move
-            "bnrk2/5p/6/6/P5 w",                 // too few ranks
-            "bnrk2/5p/6/6/P5/KRNB3 w",           // rank overflows
-            "bnrk2/5p/6/6/P5/KRNB2[Pk] w",       // king in hand
-            "~bnrk2/5p/6/6/P5/KRNB2 w",          // '~' with no piece
+            "6/6/6/6/6/6 w",
+            "bnrk2/5p/6/6/P5/KRNB2 x",
+            "bnrk2/5p/6/6/P5 w",
+            "bnrk2/5p/6/6/P5/KRNB3 w",
+            "bnrk2/5p/6/6/P5/KRNB2[Pk] w",
+            "~bnrk2/5p/6/6/P5/KRNB2 w",
         ] {
             assert!(from_fen(bad).is_err(), "should have rejected {:?}", bad);
         }

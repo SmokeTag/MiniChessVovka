@@ -30,7 +30,6 @@ DEFAULT_GAMES = int(os.environ.get("FEN_ROUNDTRIP_GAMES", "20"))
 SEED = 20260827
 MAX_PLY = 120
 
-
 def _sweep(n_games=DEFAULT_GAMES, seed=SEED):
     """Walk random games, checking every position on the way.
 
@@ -64,28 +63,22 @@ def _sweep(n_games=DEFAULT_GAMES, seed=SEED):
             if not moves:
                 break
 
-            # Same shape as tests/test_rules_parity.py: defer the game-over check until
-            # after any pending promotion is resolved.
             if not gs.make_move(rng.choice(moves), False):
                 break
             if gs.needs_promotion_choice:
                 piece = rng.choice(['R', 'N', 'B'])
-                # The turn has already flipped, so 'b' to move means White promoted.
                 gs.complete_promotion(piece if gs.current_turn == 'b' else piece.lower())
             gs.check_game_over()
 
     return checked, saw_hand, saw_promoted
 
-
 @pytest.fixture(scope="module")
 def sweep():
     return _sweep()
 
-
 def test_random_positions_round_trip_to_the_same_hash(sweep):
     checked, _, _ = sweep
     assert checked > 100, "the sweep barely ran; %d positions checked" % checked
-
 
 def test_the_sweep_covers_hands_and_promotions(sweep):
     """Guards the test itself: a sweep that never fills a hand proves nothing."""
@@ -93,28 +86,25 @@ def test_the_sweep_covers_hands_and_promotions(sweep):
     assert saw_hand > 0, "no position in the sweep had a piece in hand"
     assert saw_promoted > 0, "no position in the sweep had a promoted piece"
 
-
 def test_initial_position():
     gs = GameState()
     gs.setup_initial_board()
     assert ai.to_fen(gs) == "2bnrk/5p/6/6/P5/KRNB2[] w"
 
-
 def test_hand_and_promotion_encoding():
     parsed = ai.from_fen("2bnrk/5p/6/6/P5/KRNB1R~[PPn] b")
     assert rs.to_fen(parsed) == "2bnrk/5p/6/6/P5/KRNB1R~[PPn] b"
 
-
 @pytest.mark.parametrize("bad", [
     "",
-    "6/6/6/6/6/6[] w",                 # no kings
-    "2bnrk/5p/6/6/P5/KRNB2[] x",       # side to move is not w/b
-    "2bnrk/5p/6/6/P5[] w",             # too few ranks
-    "2bnrk/5p/6/6/P5/KRNB3[] w",       # rank overflows the board
-    "2bnrk/5p/6/6/P5/KRNB2[Pk] w",     # a king cannot be in hand
-    "~2bnrk/5p/6/6/P5/KRNB2[] w",      # '~' with no piece before it
-    "2bnrk/5p/6/6/P5/KRNB2[P w",       # unterminated hand
-    "2bnrk/5p/6/6/P5/KRNB2[]",         # missing side to move
+    "6/6/6/6/6/6[] w",
+    "2bnrk/5p/6/6/P5/KRNB2[] x",
+    "2bnrk/5p/6/6/P5[] w",
+    "2bnrk/5p/6/6/P5/KRNB3[] w",
+    "2bnrk/5p/6/6/P5/KRNB2[Pk] w",
+    "~2bnrk/5p/6/6/P5/KRNB2[] w",
+    "2bnrk/5p/6/6/P5/KRNB2[P w",
+    "2bnrk/5p/6/6/P5/KRNB2[]",
 ])
 def test_malformed_fens_are_rejected(bad):
     with pytest.raises(ValueError):

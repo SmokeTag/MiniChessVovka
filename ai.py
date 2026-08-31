@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 AI module - Rust-accelerated wrapper.
 Delegates heavy search to the Rust minichess_engine module while maintaining
@@ -10,16 +9,12 @@ import minichess_engine as _rs
 from config import BOARD_SIZE
 from utils import get_piece_color, algebraic_to_coords
 
-# --- Constants (kept for compatibility) ---
 CHECKMATE_SCORE = 1000000
 STALEMATE_SCORE = 0
 
-# --- Module-level state (compatibility with play_online.py) ---
-move_cache = {}  # Python-side mirror; Rust manages its own book internally
-tt = {}  # Not used directly; Rust has internal TT
+move_cache = {}
+tt = {}
 DB_PATH = "book.db"
-
-# --- Database / Cache ---
 
 def setup_db():
     """Create the opening book schema in book.db if it is not already there.
@@ -29,7 +24,6 @@ def setup_db():
     """
     _rs.setup_db()
 
-
 def rebuild_book():
     """Drop both book tables and recreate them at the current SCHEMA_VERSION.
 
@@ -37,13 +31,10 @@ def rebuild_book():
     """
     _rs.rebuild_book()
 
-
 def load_move_cache_from_db():
     """Load the opening book from SQLite into the Rust engine."""
     global move_cache
     _rs.load_move_cache_from_db()
-    # We don't mirror to Python dict anymore; Rust owns the book
-
 
 def save_move_cache_to_db(cache_to_save=None):
     """Flush **every** position searched since the last save back to book.db.
@@ -56,7 +47,6 @@ def save_move_cache_to_db(cache_to_save=None):
     """
     _rs.save_move_cache_to_db()
 
-
 def save_position_to_book(gamestate):
     """File just this position's search result into book.db. Returns True if it wrote.
 
@@ -67,22 +57,18 @@ def save_position_to_book(gamestate):
     """
     return _rs.save_book_position(_sync_to_rust(gamestate))
 
-
 def book_has_position(gamestate):
     """Whether this process holds a searched entry for the position — i.e. whether
     `save_position_to_book` would write anything."""
     return _rs.book_has_position(_sync_to_rust(gamestate))
 
-
 def pending_book_writes():
     """How many searched positions are queued in memory and not on disk."""
     return _rs.pending_book_writes()
 
-
 def discard_pending_book_writes():
     """Drop the unsaved queue. The entries stay in memory as analysis cache."""
     return _rs.discard_pending_book_writes()
-
 
 def book_has_row(gamestate):
     """Whether this position already has a row in `book_move` **on disk**.
@@ -93,12 +79,6 @@ def book_has_row(gamestate):
     """
     return _rs.book_has_row(_sync_to_rust(gamestate))
 
-
-# --- Analysis cache -------------------------------------------------------
-# `analysis_move` / `analysis_position` in the same book.db: the same two tables again,
-# holding what a session searched rather than what someone curated. Loading it is opt-in,
-# so `build_book.py` and `play_online.py` keep seeing the book alone.
-
 def load_analysis_from_db():
     """Merge the analysis cache into the in-memory book. Returns how many it added.
 
@@ -108,7 +88,6 @@ def load_analysis_from_db():
     """
     return _rs.load_analysis_from_db()
 
-
 def save_analysis_to_db():
     """Flush everything searched since the last flush into the analysis tables.
 
@@ -116,21 +95,17 @@ def save_analysis_to_db():
     """
     return _rs.save_analysis_to_db()
 
-
 def rebuild_analysis():
     """Drop the analysis cache and recreate it empty. The book is untouched."""
     _rs.rebuild_analysis()
-
 
 def book_size():
     """How many positions the in-memory book holds."""
     return _rs.book_size()
 
-
 def to_fen(gamestate):
     """Serialize a position to minihouse FEN (see engine_rs/src/fen.rs)."""
     return _rs.to_fen(_sync_to_rust(gamestate))
-
 
 def from_fen(fen):
     """Parse a minihouse FEN into a Rust GameState. Raises ValueError if malformed.
@@ -139,9 +114,6 @@ def from_fen(fen):
     FENs so positions can be re-searched, and a search takes the Rust state anyway.
     """
     return _rs.from_fen(fen)
-
-
-# --- Sync helpers ---
 
 def _sync_to_rust(gamestate):
     """Create a Rust GameState from a Python GameState."""
@@ -153,14 +125,8 @@ def _sync_to_rust(gamestate):
     rs.checkmate = gamestate.checkmate
     rs.stalemate = gamestate.stalemate
     rs.promoted_pieces = list(gamestate.promoted_pieces) if hasattr(gamestate, 'promoted_pieces') else []
-    # The book records how early a position can occur, and this is the only place that
-    # knows: the Rust state is rebuilt from scratch on every search, so without this
-    # every row would claim ply 0.
     rs.ply = getattr(gamestate, 'ply_count', 0)
     return rs
-
-
-# --- Core AI Functions ---
 
 def _normalize_promotion(move, color):
     """Case a promotion piece char to match the side that is moving.
@@ -180,7 +146,6 @@ def _normalize_promotion(move, color):
     start, end, promotion = move
     return (start, end, promotion.upper() if color == 'w' else promotion.lower())
 
-
 def _normalize_result(result, color):
     """Apply _normalize_promotion across either shape find_best_move returns."""
     if result is None:
@@ -189,18 +154,15 @@ def _normalize_result(result, color):
         return [(_normalize_promotion(m, color), score) for m, score in result]
     return _normalize_promotion(result, color)
 
-
 def get_position_hash(gamestate):
     """Compute Zobrist hash for the position (via Rust)."""
     rs = _sync_to_rust(gamestate)
     return _rs.get_position_hash(rs)
 
-
 def evaluate_position(gamestate):
     """Static evaluation of the position (via Rust)."""
     rs = _sync_to_rust(gamestate)
     return _rs.evaluate_position(rs)
-
 
 def set_parallel_search(enabled, min_depth=None):
     """
@@ -218,11 +180,9 @@ def set_parallel_search(enabled, min_depth=None):
     """
     _rs.set_parallel_search(enabled, min_depth)
 
-
 def get_parallel_search():
     """Return (enabled, min_depth) for the engine's root-level parallel search."""
     return _rs.get_parallel_search()
-
 
 def find_best_move(gamestate, depth=6, return_top_n=1, time_limit=None, parallel=None):
     """
@@ -263,17 +223,14 @@ def find_best_move(gamestate, depth=6, return_top_n=1, time_limit=None, parallel
         print(f"AI ({gamestate.current_turn}) finished (single move) in {elapsed:.2f}s.")
         return legal_moves[0] if return_top_n == 1 else [(legal_moves[0], 0)]
 
-    # Sync Python GameState → Rust
     rs = _sync_to_rust(gamestate)
 
-    # Call Rust search
     result = _rs.find_best_move(rs, depth, return_top_n, time_limit, parallel)
 
     elapsed = time.time() - start_time
     print(f"AI ({gamestate.current_turn}) finished in {elapsed:.2f}s.")
 
     return _normalize_result(result, gamestate.current_turn)
-
 
 def find_best_move_with_score(gamestate, depth=6, time_limit=None, parallel=None):
     """Single-PV search returning `(move, white_relative_score)`.
@@ -302,9 +259,6 @@ def find_best_move_with_score(gamestate, depth=6, time_limit=None, parallel=None
         return None, None
     return _normalize_promotion(move, gamestate.current_turn), int(score)
 
-
-# --- Compatibility functions used by tests and other modules ---
-
 def minimax_alpha_beta(gamestate, depth, alpha, beta, maximizing_player, allow_null=True):
     """
     Compatibility wrapper. Runs a Rust search at the given depth and returns (score, best_move).
@@ -315,10 +269,7 @@ def minimax_alpha_beta(gamestate, depth, alpha, beta, maximizing_player, allow_n
     if result is None:
         score = evaluate_position(gamestate)
         return (score, None)
-    # find_best_move returns just the move tuple when return_top_n=1
-    # We need (score, move) - run eval on the resulting position for score
     return (0, _normalize_promotion(result, gamestate.current_turn))
-
 
 def parse_move_string(move_str):
     """Convert move string (e.g., 'e2e4', 'N@c3') to internal move format."""
@@ -337,7 +288,6 @@ def parse_move_string(move_str):
     except Exception as e:
         print(f"[ERROR] Failed to parse move string '{move_str}': {e}")
     return None
-
 
 def is_move_still_legal(gamestate, move):
     """Check if a move is legal in the current gamestate."""

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Fill book.db with an opening *repertoire*, not with whole games.
 
 The book is only ever read at the root of `find_best_move`, which means it is only ever
@@ -50,11 +49,9 @@ if _REPO_ROOT not in sys.path:
 import minichess_engine as engine
 import ai
 
-# A repertoire past this is not a repertoire. Real games have long left the book.
 HARD_PLY_CAP = 20
 
 shutdown_requested = False
-
 
 def _on_signal(signum, frame):
     global shutdown_requested
@@ -64,24 +61,10 @@ def _on_signal(signum, frame):
     print("\nInterrupt received — finishing the current search, then flushing to book.db.",
           flush=True)
 
-
-# --- position helpers -------------------------------------------------------------
-#
-# The builder stays on the Rust GameState throughout. It is the side that owns the book,
-# the hash and the FEN, and staying on it avoids _sync_to_rust on every node as well as
-# the promotion-case reconciliation that only exists because gamestate.py disagrees with
-# the generator. Nodes are carried as (fen, ply) and rebuilt on demand: a FEN is ~30 bytes
-# where a live state is not, and from_fen(to_fen(gs)) is hash-stable by construction.
-
-
 def state_from(fen, ply):
     gs = engine.from_fen(fen)
-    # from_fen has no ply to read -- ply is path-dependent and deliberately not in the
-    # FEN -- so the builder is the only thing that knows it. Without this every row
-    # would claim its position first occurs at ply 0.
     gs.ply = ply
     return gs
-
 
 def child_after(gs, move):
     """The position after `move`, or None if it could not be played."""
@@ -89,14 +72,8 @@ def child_after(gs, move):
     if not nxt.make_move(move):
         return None
     if nxt.needs_promotion_choice:
-        # The generator emits promotions with the piece already chosen, so this should be
-        # unreachable; leaving the state half-applied would corrupt every hash below it.
         return None
     return nxt
-
-
-# --- opponent breadth policy ------------------------------------------------------
-
 
 def parse_breadth(spec):
     """`"all"`, `"3"`, or `"0-8:all,9-16:3"` -> [(lo_ply, hi_ply, keep_or_None)].
@@ -124,13 +101,11 @@ def parse_breadth(spec):
         rules.append((lo, hi, k))
     return rules
 
-
 def breadth_at(rules, ply):
     for lo, hi, k in rules:
         if lo <= ply <= hi:
             return k
     return None
-
 
 def rank_replies(opp_gs, keep, scan_depth):
     """The `keep` best replies for the side to move in `opp_gs`, ranked by one shallow
@@ -152,12 +127,8 @@ def rank_replies(opp_gs, keep, scan_depth):
     for m, _score in ranked[:keep]:
         nxt = child_after(opp_gs, m)
         if nxt is not None and nxt.get_all_legal_moves():
-            kept.append((m, nxt))  # terminal replies drop out: no answer to store
+            kept.append((m, nxt))
     return kept
-
-
-# --- the build --------------------------------------------------------------------
-
 
 def seeds(colors):
     """Roots of each repertoire, as our-turn nodes.
@@ -177,7 +148,6 @@ def seeds(colors):
                 out.append((engine.to_fen(nxt), 1))
     return out
 
-
 def build(args):
     rules = parse_breadth(args.opponent_breadth)
     shard_i, shard_n = args.shard
@@ -190,10 +160,6 @@ def build(args):
 
     queue = deque()
     seen = set()
-    # Subtree id, handed out at the first node deep enough to shard on and inherited by
-    # everything below it. Every worker walks the whole prefix above --split-ply, so every
-    # worker hands out the same ids in the same order; below it a worker keeps only its own
-    # subtrees, which makes the shards disjoint without any coordination.
     counters = {"next_subtree": 0, "skipped": 0}
 
     def enqueue(fen, ply, subtree):
@@ -230,11 +196,8 @@ def build(args):
 
         gs = state_from(fen, ply)
         if not gs.get_all_legal_moves():
-            continue  # terminal: nothing to answer
+            continue
 
-        # A node already in the book at this depth comes back from probe_book in ~0s.
-        # That is what makes the build resumable and what lets a worker read the prefix
-        # another worker searched, so most of `visited` early in a stage is not work.
         move, score = engine.find_best_move_with_score(gs, args.depth, None, False)
         if move is None:
             continue
@@ -248,9 +211,6 @@ def build(args):
                   % (tag, visited, ai.book_size() - size_before, len(queue),
                      time.time() - started), flush=True)
 
-        # The line is already decided. The score is free -- it is the one the search just
-        # returned -- so this is the cheapest filter available, and it is what stops a
-        # single bad opponent reply from costing a whole subtree.
         if abs(score) >= args.resign:
             cut_resign += 1
             continue
@@ -278,7 +238,7 @@ def build(args):
         for _m, nxt in kept:
             h = engine.get_position_hash(nxt)
             if h in seen:
-                continue  # transposition: one entry answers both paths
+                continue
             seen.add(h)
             enqueue(engine.to_fen(nxt), ply + 2, subtree)
 
@@ -298,7 +258,6 @@ def build(args):
     print("%s  book.db:         %d positions" % (tag, ai.book_size()))
     return 0 if not shutdown_requested else 130
 
-
 def shard_arg(value):
     try:
         i, n = value.split("/")
@@ -308,7 +267,6 @@ def shard_arg(value):
     if n < 1 or not (0 <= i < n):
         raise argparse.ArgumentTypeError("--shard I/N needs N >= 1 and 0 <= I < N")
     return (i, n)
-
 
 def main():
     p = argparse.ArgumentParser(
@@ -355,25 +313,17 @@ def main():
     colors = ("white", "black") if args.color == "both" else (args.color,)
     args.color = colors
 
-    # The engine's DB path is the relative string "book.db", so the repo root has to be the
-    # working directory or a worker silently builds its own book somewhere else. This lives
-    # in main() rather than at import: it is the only seam a test has for isolating the book
-    # (tests/cache_isolation.py), and a module-level chdir would drag every importer back to
-    # the repo root and into the live book.
     os.chdir(_REPO_ROOT)
 
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
-    # Root-parallel search is for interactive analysis of one position. Here throughput
-    # comes from many workers on disjoint subtrees, exactly as in self-play.
     ai.set_parallel_search(False)
 
     print("repertoire: colors=%s max_ply=%d depth=%d resign=%d breadth=%s split_ply=%d"
           % ("+".join(colors), args.max_ply, args.depth, args.resign,
              args.opponent_breadth, args.split_ply), flush=True)
     return build(args)
-
 
 if __name__ == "__main__":
     sys.exit(main())

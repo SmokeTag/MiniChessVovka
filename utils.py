@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
 from config import BOARD_SIZE, EVAL_BAR_CLAMP, MATE_SCORE_CUTOFF, PAWN_UNIT
 from pieces import EMPTY_SQUARE
 
-# --- Helper Functions ---
 def get_piece_color(piece):
     if piece == EMPTY_SQUARE: return None
     return 'w' if piece.isupper() else 'b'
@@ -19,7 +17,6 @@ def coords_to_algebraic(r, f):
 def algebraic_to_coords(alg):
     if not isinstance(alg, str) or len(alg) != 2: return None
     file_char, rank_char = alg[0], alg[1]
-    # Adjust check for file based on BOARD_SIZE
     max_file_char = chr(ord('a') + BOARD_SIZE - 1)
     max_rank_char = str(BOARD_SIZE)
     if not (('a' <= file_char <= max_file_char) and ('1' <= rank_char <= max_rank_char)): return None
@@ -27,7 +24,7 @@ def algebraic_to_coords(alg):
     file = ord(file_char) - ord('a')
     rank = int(rank_char) - 1
     internal_rank = BOARD_SIZE - 1 - rank
-    if not is_on_board(internal_rank, file): return None # Should be redundant but safe
+    if not is_on_board(internal_rank, file): return None
     return internal_rank, file
 
 def piece_to_lower(piece_type): return piece_type.lower()
@@ -43,7 +40,7 @@ def format_move_for_print(move):
     else:
         (r1, f1), (r2, f2), promotion = move
         s = f"{coords_to_algebraic(r1, f1)}{coords_to_algebraic(r2, f2)}"
-        if promotion: s += f"={promotion.upper()}" # Show the promotion
+        if promotion: s += f"={promotion.upper()}"
         return s
 
 def is_same_move(move1, move2):
@@ -52,7 +49,6 @@ def is_same_move(move1, move2):
     if move1[0] == 'drop' and move2[0] == 'drop':
         return move1[1] == move2[1] and move1[2] == move2[2]
     elif move1[0] != 'drop' and move2[0] != 'drop':
-        # Check if both are tuple-like (start, end, promotion)
         if isinstance(move1[0], tuple) and isinstance(move2[0], tuple) and \
            isinstance(move1[1], tuple) and isinstance(move2[1], tuple):
              return move1[0] == move2[0] and move1[1] == move2[1]
@@ -75,7 +71,6 @@ def format_score(score):
     if score <= -MATE_SCORE_CUTOFF:
         return "Black mates"
     return f"{score / PAWN_UNIT:+.2f}"
-
 
 def score_advantage(score):
     """Score as a fraction in [-1, 1] for the eval bar. +1 is winning for White."""

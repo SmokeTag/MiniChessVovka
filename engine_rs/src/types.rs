@@ -114,7 +114,6 @@ impl Piece {
         }
     }
 
-    /// Convert char like 'P','n','B',etc to Piece
     pub fn from_char(c: char) -> Piece {
         match c {
             'P' => Piece::WhitePawn,
@@ -152,16 +151,10 @@ impl Piece {
     }
 }
 
-/// Compact move representation
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Move {
     pub data: u32,
 }
-
-// Encoding:
-// Bit 0:     is_drop (1=drop, 0=normal)
-// Normal move: bits 1-6: from_sq, bits 7-12: to_sq, bits 13-15: promotion (0=none, 1=R, 2=N, 3=B)
-// Drop move:   bits 1-6: to_sq, bits 7-9: piece_type(0-4), bit 10: color(0=W,1=B)
 
 impl Move {
     pub const NULL: Move = Move { data: u32::MAX };
@@ -201,7 +194,6 @@ impl Move {
         self.data == u32::MAX
     }
 
-    // Normal move accessors
     #[inline]
     pub fn from_sq(self) -> usize {
         ((self.data >> 1) & 0x3F) as usize
@@ -229,7 +221,6 @@ impl Move {
         }
     }
 
-    // Drop move accessors
     #[inline]
     pub fn drop_piece_type(self) -> PieceType {
         match (self.data >> 7) & 0x7 {
@@ -290,7 +281,6 @@ impl fmt::Debug for Move {
     }
 }
 
-// Square helpers
 #[inline]
 pub fn sq(r: usize, f: usize) -> usize {
     r * BOARD_SIZE + f
@@ -323,9 +313,7 @@ pub const KING_OFFSETS: [(i32, i32); 8] = [
     (1, 0), (-1, 0), (0, 1), (0, -1),
 ];
 
-/// Piece values in centipawns
-pub const PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20000]; // P N B R Q K
-// Hand pieces worth significantly more: instant deployment, surprise factor, tempo
-pub const HAND_PIECE_VALUES: [i32; 5] = [200, 550, 530, 800, 1200]; // P N B R Q
+pub const PIECE_VALUES: [i32; 6] = [100, 320, 330, 500, 900, 20000];
+pub const HAND_PIECE_VALUES: [i32; 5] = [200, 550, 530, 800, 1200];
 
 pub const PROMOTION_PIECES: [PieceType; 3] = [PieceType::Rook, PieceType::Knight, PieceType::Bishop];
