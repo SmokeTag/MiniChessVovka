@@ -390,9 +390,10 @@ fn minimax_ab(
     }
 
     let null_move_r = 2;
+    let is_pv = beta.saturating_sub(alpha) > 1;
     let opponent_color = current_color.opposite();
     let opponent_hand: u8 = gs.hands[opponent_color.index()].iter().sum();
-    if allow_null && depth >= null_move_r + 1 && !in_check && opponent_hand == 0 {
+    if allow_null && !is_pv && depth >= null_move_r + 1 && !in_check && opponent_hand == 0 {
         gs.current_turn = gs.current_turn.opposite();
         gs.hash = gs.compute_hash();
         gs.invalidate_cache();
@@ -401,8 +402,14 @@ fn minimax_ab(
         gs.hash = gs.compute_hash();
         gs.invalidate_cache();
 
-        if maximizing && null_score >= beta { return (beta, Move::NULL); }
-        if !maximizing && null_score <= alpha { return (alpha, Move::NULL); }
+        let fails_high = if maximizing { null_score >= beta } else { null_score <= alpha };
+        if fails_high && !ss.stopped {
+            let (verified, _) = minimax_ab(gs, depth - null_move_r, alpha, beta, maximizing, false, ss);
+            let confirmed = if maximizing { verified >= beta } else { verified <= alpha };
+            if confirmed {
+                return (if maximizing { beta } else { alpha }, Move::NULL);
+            }
+        }
     }
 
     let tt_best = tt_entry.as_ref().map(|e| e.best_move).unwrap_or(Move::NULL);
