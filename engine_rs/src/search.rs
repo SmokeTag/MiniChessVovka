@@ -73,8 +73,118 @@ pub enum TTFlag {
     UpperBound,
 }
 
+const TT_OCCUPIED: u64 = 1 << 58;
+
+#[inline]
+fn tt_pack(e: &TTEntry) -> u64 {
+    let mv = if e.best_move.is_null() { 0xFFFF } else { (e.best_move.data as u64) & 0xFFFF };
+    let d = e.depth.clamp(0, 255) as u64;
+    let f = match e.flag { TTFlag::Exact => 0u64, TTFlag::LowerBound => 1, TTFlag::UpperBound => 2 };
+    (e.score as u32 as u64) | (mv << 32) | (d << 48) | (f << 56) | TT_OCCUPIED
+}
+
+#[inline]
+fn tt_unpack(w: u64) -> TTEntry {
+    let mv = ((w >> 32) & 0xFFFF) as u32;
+    TTEntry {
+        score: (w & 0xFFFF_FFFF) as u32 as i32,
+        best_move: if mv == 0xFFFF { Move::NULL } else { Move { data: mv } },
+        depth: ((w >> 48) & 0xFF) as i32,
+        flag: match (w >> 56) & 0x3 {
+            0 => TTFlag::Exact,
+            1 => TTFlag::LowerBound,
+            _ => TTFlag::UpperBound,
+        },
+    }
+}
+
+#[inline]
+fn tt_depth_of(w: u64) -> i32 { ((w >> 48) & 0xFF) as i32 }
+
+const TT_WAYS: usize = 4;
+
+const TT_DEFAULT_SLOTS: usize = 1 << 21;
+
+pub struct TransTable {
+    words: Vec<u64>,
+    mask: usize,
+    slots: usize,
+}
+
+impl TransTable {
+    pub fn with_slots(slots: usize) -> Self {
+        let n = (slots / TT_WAYS).next_power_of_two().max(1 << 8);
+        TransTable {
+            words: vec![0u64; n * TT_WAYS * 2],
+            mask: n - 1,
+            slots: n * TT_WAYS,
+        }
+    }
+
+    #[inline]
+    pub fn slots(&self) -> usize { self.slots }
+
+    #[inline]
+    pub fn get(&mut self, hash: u64) -> Option<TTEntry> {
+        let b = (hash as usize & self.mask) * (TT_WAYS * 2);
+        for w in 0..TT_WAYS {
+            let d = self.words[b + w * 2 + 1];
+            if d & TT_OCCUPIED != 0 && self.words[b + w * 2] == hash {
+                return Some(tt_unpack(d));
+            }
+        }
+        None
+    }
+
+    #[inline]
+    pub fn insert(&mut self, hash: u64, e: &TTEntry) {
+        let b = (hash as usize & self.mask) * (TT_WAYS * 2);
+        for w in 0..TT_WAYS {
+            let d = self.words[b + w * 2 + 1];
+            if d & TT_OCCUPIED == 0 {
+                self.words[b + w * 2] = hash;
+                self.words[b + w * 2 + 1] = tt_pack(e);
+                return;
+            }
+            if self.words[b + w * 2] == hash {
+                self.words[b + w * 2 + 1] = tt_pack(e);
+                return;
+            }
+        }
+        let mut victim = 0usize;
+        let mut vdepth = i32::MAX;
+        for w in 0..TT_WAYS {
+            let dd = tt_depth_of(self.words[b + w * 2 + 1]);
+            if dd < vdepth {
+                vdepth = dd;
+                victim = w;
+            }
+        }
+        if vdepth > e.depth {
+            return;
+        }
+        self.words[b + victim * 2] = hash;
+        self.words[b + victim * 2 + 1] = tt_pack(e);
+    }
+
+    pub fn clear(&mut self) {
+        self.words.iter_mut().for_each(|w| *w = 0);
+    }
+
+    pub fn len(&self) -> usize {
+        self.words.chunks_exact(2).filter(|c| c[1] & TT_OCCUPIED != 0).count()
+    }
+
+    pub fn iter_entries(&self) -> impl Iterator<Item = (u64, TTEntry)> + '_ {
+        self.words
+            .chunks_exact(2)
+            .filter(|c| c[1] & TT_OCCUPIED != 0)
+            .map(|c| (c[0], tt_unpack(c[1])))
+    }
+}
+
 pub struct SearchState {
-    pub tt: FastMap<u64, TTEntry>,
+    pub tt: TransTable,
     pub base_tt: Option<Arc<FastMap<u64, TTEntry>>>,
     pub killer_moves: FastMap<i32, [Move; 2]>,
     pub history_scores: FastMap<u32, i32>,
@@ -85,12 +195,12 @@ pub struct SearchState {
 
 impl SearchState {
     pub fn new() -> Self {
-        SearchState::with_tt_capacity(1 << 20)
+        SearchState::with_tt_capacity(TT_DEFAULT_SLOTS)
     }
 
     pub fn with_tt_capacity(cap: usize) -> Self {
         SearchState {
-            tt: FastMap::with_capacity_and_hasher(cap, MixBuild::default()),
+            tt: TransTable::with_slots(cap),
             base_tt: None,
             killer_moves: FastMap::default(),
             history_scores: FastMap::default(),
@@ -108,9 +218,9 @@ impl SearchState {
     }
 
     #[inline]
-    pub fn tt_get(&self, hash: u64) -> Option<TTEntry> {
-        if let Some(e) = self.tt.get(&hash) {
-            return Some(e.clone());
+    pub fn tt_get(&mut self, hash: u64) -> Option<TTEntry> {
+        if let Some(e) = self.tt.get(hash) {
+            return Some(e);
         }
         self.base_tt.as_ref().and_then(|b| b.get(&hash).cloned())
     }
@@ -524,7 +634,7 @@ fn minimax_ab(
         } else {
             TTFlag::Exact
         };
-        ss.tt.insert(pos_hash, TTEntry { depth, score: max_eval, flag, best_move });
+        ss.tt.insert(pos_hash, &TTEntry { depth, score: max_eval, flag, best_move });
         (max_eval, best_move)
     } else {
         let mut min_eval = i32::MAX;
@@ -578,7 +688,7 @@ fn minimax_ab(
         } else {
             TTFlag::Exact
         };
-        ss.tt.insert(pos_hash, TTEntry { depth, score: min_eval, flag, best_move });
+        ss.tt.insert(pos_hash, &TTEntry { depth, score: min_eval, flag, best_move });
         (min_eval, best_move)
     }
 }
@@ -602,7 +712,7 @@ fn search_worker(
     deadline: Option<Instant>,
 ) -> (Move, i32, bool) {
     let mut gs_copy = gs.fast_copy();
-    let mut ss = SearchState::with_tt_capacity(1 << 14);
+    let mut ss = SearchState::with_tt_capacity(1 << 18);
     ss.base_tt = Some(Arc::clone(base_tt));
     ss.killer_moves = heuristics.killer_moves.clone();
     ss.history_scores = heuristics.history_scores.clone();
@@ -645,9 +755,8 @@ fn minimax_parallel(
 
     let min_useful = (depth - 3).max(1);
     let base_tt: SharedTT = Arc::new(
-        ss.tt.iter()
+        ss.tt.iter_entries()
             .filter(|(_, e)| e.depth >= min_useful)
-            .map(|(k, v)| (*k, v.clone()))
             .collect(),
     );
     let heuristics = RootHeuristics {
