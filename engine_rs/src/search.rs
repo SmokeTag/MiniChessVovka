@@ -10,6 +10,7 @@ use crate::eval::{evaluate_position, CHECKMATE_SCORE, STALEMATE_SCORE};
 use crate::zobrist;
 
 const MAX_QUIESCENCE_DEPTH: i32 = 4;
+const DELTA_MARGIN: i32 = 900;
 
 #[derive(Default, Clone, Copy)]
 pub struct MixHasher(u64);
@@ -434,7 +435,7 @@ fn quiescence_search(gs: &mut GameState, mut alpha: i32, mut beta: i32, maximizi
         return stand_pat;
     }
 
-    let delta_margin = PIECE_VALUES[PieceType::Rook.index()];
+    let delta_margin = DELTA_MARGIN;
     if maximizing && stand_pat < alpha.saturating_sub(delta_margin) {
         return alpha;
     }

@@ -79,8 +79,13 @@ class TestRepertoireShape(IsolatedCacheDB):
 class TestBounds(IsolatedCacheDB):
     def test_resign_cutoff_stops_expansion_but_still_stores_the_node(self):
         """A decided line keeps its own entry -- we may still have to play it -- and just
-        does not get a subtree."""
-        build_book.build(build_args(max_ply=4, resign=1))
+        does not get a subtree.
+
+        resign=0 decides every line, since the cutoff is `abs(score) >= resign`. Using 1
+        instead relied on no node scoring exactly 0, which is not a property of the
+        search: a dead-level node scores 0, is correctly *not* decided, and expands.
+        """
+        build_book.build(build_args(max_ply=4, resign=0))
         counts = plies()
         self.assertEqual(counts.get(0), 1)
         self.assertEqual(counts.get(1), 15)
