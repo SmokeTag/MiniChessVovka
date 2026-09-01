@@ -440,6 +440,30 @@ impl PyGameState {
 
     fn repetition_count(&self) -> usize { self.inner.repetition_count() }
 
+    fn is_terminal_draw(&self) -> bool { self.inner.is_terminal_draw() }
+
+    #[getter]
+    fn reversible_plies(&self) -> u32 { self.inner.reversible_plies }
+
+    #[setter]
+    fn set_reversible_plies(&mut self, v: u32) { self.inner.reversible_plies = v; }
+
+    #[getter]
+    fn position_history(&self) -> Vec<u64> { self.inner.position_history.clone() }
+
+    #[setter]
+    fn set_position_history(&mut self, v: Vec<u64>) {
+        let reversible = v.len().saturating_sub(1).min(crate::gamestate::MAX_REPETITION_SCAN) as u32;
+        self.inner.position_history = v;
+        if self.inner.position_history.is_empty() {
+            self.inner.position_history.push(self.inner.hash);
+            self.inner.reversible_plies = 0;
+        } else {
+            self.inner.reversible_plies = reversible;
+        }
+        self.inner.history_root = self.inner.position_history.len();
+    }
+
     #[getter]
     fn needs_promotion_choice(&self) -> bool { self.inner.needs_promotion_choice }
 

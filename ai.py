@@ -115,6 +115,70 @@ def from_fen(fen):
     """
     return _rs.from_fen(fen)
 
+HISTORY_LIMIT = 24
+
+_history_hash_memo = {}
+
+def _hash_of_position_key(key):
+    """Zobrist hash of a `gamestate._position_key()` tuple.
+
+    The key carries exactly what the Zobrist hash reads -- board, side to move, both
+    hands, promoted squares -- so a bare Rust GameState built from it hashes to the
+    same value the real position did, without replaying the game.
+    """
+    board_key, turn, white_hand, black_hand, promoted = key
+    rs = _rs.GameState()
+    rs.board = [list(row) for row in board_key]
+    rs.current_turn = turn
+    rs.hands = {'w': dict(white_hand), 'b': dict(black_hand)}
+    rs.promoted_pieces = [tuple(sq) for sq in promoted]
+    return int(_rs.get_position_hash(rs))
+
+def _pawn_layout(board_key):
+    return tuple(tuple(c if c in ('P', 'p') else '.' for c in row) for row in board_key)
+
+def _reversible_tail(history):
+    """The longest suffix of `history` reached only by reversible moves.
+
+    A repetition cannot span a capture, a drop, a pawn move or a promotion, so
+    everything before the last such move is dead weight in the search's backward scan.
+    Hands, the promoted set and the pawn layout between consecutive keys are enough to
+    spot all four: a capture and a drop both move a piece through a hand, and a
+    promotion moves a pawn.
+    """
+    i = len(history) - 1
+    while i > 0 and len(history) - i <= HISTORY_LIMIT:
+        prev, cur = history[i - 1], history[i]
+        if prev[2] != cur[2] or prev[3] != cur[3] or prev[4] != cur[4]:
+            break
+        if _pawn_layout(prev[0]) != _pawn_layout(cur[0]):
+            break
+        i -= 1
+    return history[i:]
+
+def _history_hashes(gamestate):
+    """The game's recent position hashes, newest last, for the Rust repetition check.
+
+    Returns [] when there is nothing to carry; the Rust side then seeds itself with the
+    root position alone. Memoised because `_sync_to_rust` runs on every engine call and
+    the same handful of keys come back every time.
+    """
+    history = getattr(gamestate, 'position_history', None)
+    if not history:
+        return []
+    if not isinstance(history[0], tuple):
+        return [int(h) for h in history[-HISTORY_LIMIT:]]
+    out = []
+    for key in _reversible_tail(history):
+        h = _history_hash_memo.get(key)
+        if h is None:
+            h = _hash_of_position_key(key)
+            if len(_history_hash_memo) >= 4096:
+                _history_hash_memo.clear()
+            _history_hash_memo[key] = h
+        out.append(h)
+    return out
+
 def _sync_to_rust(gamestate):
     """Create a Rust GameState from a Python GameState."""
     rs = _rs.GameState()
@@ -126,6 +190,10 @@ def _sync_to_rust(gamestate):
     rs.stalemate = gamestate.stalemate
     rs.promoted_pieces = list(gamestate.promoted_pieces) if hasattr(gamestate, 'promoted_pieces') else []
     rs.ply = getattr(gamestate, 'ply_count', 0)
+    rs.ply_limit = getattr(gamestate, 'ply_limit', rs.ply_limit)
+    history = _history_hashes(gamestate)
+    if history:
+        rs.position_history = history
     return rs
 
 def _normalize_promotion(move, color):

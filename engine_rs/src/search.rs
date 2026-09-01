@@ -4,9 +4,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::types::*;
-use crate::gamestate::GameState;
+use crate::gamestate::{DrawKind, GameState};
 use crate::cache::{Book, BookEntry, BookMove};
 use crate::eval::{evaluate_position, CHECKMATE_SCORE, STALEMATE_SCORE};
+
+pub const DRAW_SCORE: i32 = 0;
 use crate::zobrist;
 
 const MAX_QUIESCENCE_DEPTH: i32 = 4;
@@ -191,6 +193,7 @@ pub struct SearchState {
     pub history_scores: FastMap<u32, i32>,
     pub deadline: Option<Instant>,
     pub stopped: bool,
+    pub draw_used_history: bool,
     nodes_since_check: u32,
 }
 
@@ -207,6 +210,7 @@ impl SearchState {
             history_scores: FastMap::default(),
             deadline: None,
             stopped: false,
+            draw_used_history: false,
             nodes_since_check: 0,
         }
     }
@@ -420,7 +424,15 @@ fn get_noisy_moves(gs: &mut GameState) -> Vec<Move> {
     noisy
 }
 
-fn quiescence_search(gs: &mut GameState, mut alpha: i32, mut beta: i32, maximizing: bool, depth: i32) -> i32 {
+fn quiescence_search(gs: &mut GameState, mut alpha: i32, mut beta: i32, maximizing: bool, depth: i32, ss: &mut SearchState) -> i32 {
+    match gs.search_draw() {
+        DrawKind::None => {}
+        kind => {
+            if kind == DrawKind::FromHistory { ss.draw_used_history = true; }
+            return DRAW_SCORE;
+        }
+    }
+
     let stand_pat = evaluate_position(gs);
 
     let legal = gs.get_legal_moves_vec();
@@ -452,7 +464,7 @@ fn quiescence_search(gs: &mut GameState, mut alpha: i32, mut beta: i32, maximizi
 
         for m in &noisy {
             gs.make_ai_move(*m);
-            let score = quiescence_search(gs, alpha, beta, false, depth - 1);
+            let score = quiescence_search(gs, alpha, beta, false, depth - 1, ss);
             gs.undo_ai_move();
 
             if score >= CHECKMATE_SCORE { return CHECKMATE_SCORE; }
@@ -469,7 +481,7 @@ fn quiescence_search(gs: &mut GameState, mut alpha: i32, mut beta: i32, maximizi
 
         for m in &noisy {
             gs.make_ai_move(*m);
-            let score = quiescence_search(gs, alpha, beta, true, depth - 1);
+            let score = quiescence_search(gs, alpha, beta, true, depth - 1, ss);
             gs.undo_ai_move();
 
             if score <= -CHECKMATE_SCORE { return -CHECKMATE_SCORE; }
@@ -493,6 +505,14 @@ fn minimax_ab(
         return (evaluate_position(gs), Move::NULL);
     }
 
+    match gs.search_draw() {
+        DrawKind::None => {}
+        kind => {
+            if kind == DrawKind::FromHistory { ss.draw_used_history = true; }
+            return (DRAW_SCORE, Move::NULL);
+        }
+    }
+
     let current_color = if maximizing { Color::White } else { Color::Black };
     let in_check = if current_color == gs.current_turn {
         gs.side_to_move_in_check()
@@ -504,7 +524,7 @@ fn minimax_ab(
     }
 
     if depth <= 0 || gs.checkmate || gs.stalemate {
-        let q = quiescence_search(gs, alpha, beta, maximizing, MAX_QUIESCENCE_DEPTH);
+        let q = quiescence_search(gs, alpha, beta, maximizing, MAX_QUIESCENCE_DEPTH, ss);
         return (q, Move::NULL);
     }
 
@@ -540,7 +560,9 @@ fn minimax_ab(
         gs.current_turn = gs.current_turn.opposite();
         gs.hash = gs.compute_hash();
         gs.invalidate_cache();
+        let saved_reversible = gs.push_null_position();
         let (null_score, _) = minimax_ab(gs, depth - 1 - null_move_r, alpha, beta, !maximizing, false, ss);
+        gs.pop_null_position(saved_reversible);
         gs.current_turn = gs.current_turn.opposite();
         gs.hash = gs.compute_hash();
         gs.invalidate_cache();
@@ -711,7 +733,7 @@ fn search_worker(
     base_tt: &SharedTT,
     heuristics: &RootHeuristics,
     deadline: Option<Instant>,
-) -> (Move, i32, bool) {
+) -> (Move, i32, bool, bool) {
     let mut gs_copy = gs.fast_copy();
     let mut ss = SearchState::with_tt_capacity(1 << 18);
     ss.base_tt = Some(Arc::clone(base_tt));
@@ -722,7 +744,7 @@ fn search_worker(
     gs_copy.make_ai_move(m);
     let (score, _) = minimax_ab(&mut gs_copy, depth - 1, alpha, beta, !maximizing, true, &mut ss);
 
-    (m, score, ss.stopped)
+    (m, score, ss.stopped, ss.draw_used_history)
 }
 
 fn minimax_parallel(
@@ -774,7 +796,7 @@ fn minimax_parallel(
     };
 
     let scout_start = Instant::now();
-    let scouted: Vec<(Move, i32, bool)> = {
+    let scouted: Vec<(Move, i32, bool, bool)> = {
         use rayon::prelude::*;
         remaining.par_iter().map(|&m| {
             search_worker(&gs_snapshot, m, depth, scout_alpha, scout_beta, maximizing, &base_tt, &heuristics, deadline)
@@ -783,7 +805,8 @@ fn minimax_parallel(
     let scout_secs = scout_start.elapsed().as_secs_f64();
 
     let mut candidates: Vec<(Move, i32)> = Vec::new();
-    for (m, score, worker_stopped) in scouted {
+    for (m, score, worker_stopped, used_history) in scouted {
+        ss.draw_used_history |= used_history;
         if worker_stopped {
             ss.stopped = true;
             return (Move::NULL, 0, vec![]);
@@ -805,7 +828,7 @@ fn minimax_parallel(
     let n_candidates = candidates.len();
     let research_start = Instant::now();
     let (window_alpha, window_beta) = if maximizing { (best_score, inf) } else { (neg_inf, best_score) };
-    let researched: Vec<(Move, i32, bool)> = if n_candidates > 1 {
+    let researched: Vec<(Move, i32, bool, bool)> = if n_candidates > 1 {
         use rayon::prelude::*;
         candidates
             .par_iter()
@@ -820,12 +843,13 @@ fn minimax_parallel(
                 gs.make_ai_move(m);
                 let (score, _) = minimax_ab(gs, depth - 1, window_alpha, window_beta, !maximizing, true, ss);
                 gs.undo_ai_move();
-                (m, score, ss.stopped)
+                (m, score, ss.stopped, ss.draw_used_history)
             })
             .collect()
     };
 
-    for (m, score, stopped) in researched {
+    for (m, score, stopped, used_history) in researched {
+        ss.draw_used_history |= used_history;
         if stopped {
             return (Move::NULL, 0, vec![]);
         }
@@ -1020,6 +1044,7 @@ pub fn find_best_move(
     parallel: Option<bool>,
 ) -> Vec<(Move, i32)> {
     let start = Instant::now();
+    gs.set_search_root();
     let maximizing = gs.current_turn == Color::White;
     let pos_hash_str = gs.hash.to_string();
     let want_ranks = top_n.max(1) as usize;
@@ -1138,6 +1163,12 @@ pub fn find_best_move(
 
     match completed {
         Some((ranked, depth_completed)) => {
+            if ss.draw_used_history {
+                eprintln!(
+                    "  [BOOK] not stored: the score rests on a repetition against this game's history, which the hash does not carry"
+                );
+                return ranked;
+            }
             book_store(
                 &mut book.lock().unwrap(),
                 dirty,
