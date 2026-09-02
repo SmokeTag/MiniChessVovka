@@ -5,6 +5,7 @@ mod eval;
 mod fen;
 mod search;
 mod cache;
+mod encode;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyTuple, PyDict};
@@ -850,6 +851,31 @@ fn parse_move_string(py: Python<'_>, s: &str) -> PyResult<PyObject> {
     }
 }
 
+#[pyfunction]
+fn encode_position(gs: &PyGameState) -> Vec<f32> {
+    encode::encode_position(&gs.inner)
+}
+
+#[pyfunction]
+fn move_to_action_index(py: Python<'_>, gs: &PyGameState, m: &Bound<'_, PyAny>) -> PyResult<usize> {
+    let mv = py_move_to_rust(py, m)?;
+    encode::move_to_index(mv, gs.inner.current_turn)
+        .ok_or_else(|| PyValueError::new_err("move has no action index"))
+}
+
+#[pyfunction]
+fn action_index_to_move(py: Python<'_>, gs: &PyGameState, index: usize) -> PyObject {
+    match encode::index_to_move(index, gs.inner.current_turn) {
+        Some(m) => rust_move_to_py(py, m),
+        None => py.None(),
+    }
+}
+
+#[pyfunction]
+fn legal_action_indices(gs: &mut PyGameState) -> Vec<usize> {
+    encode::legal_action_indices(&mut gs.inner)
+}
+
 #[pymodule]
 fn minichess_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGameState>()?;
@@ -880,12 +906,20 @@ fn minichess_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reset_search_knobs, m)?)?;
     m.add_function(wrap_pyfunction!(get_search_knobs, m)?)?;
     m.add_function(wrap_pyfunction!(last_search_nodes, m)?)?;
+    m.add_function(wrap_pyfunction!(encode_position, m)?)?;
+    m.add_function(wrap_pyfunction!(move_to_action_index, m)?)?;
+    m.add_function(wrap_pyfunction!(action_index_to_move, m)?)?;
+    m.add_function(wrap_pyfunction!(legal_action_indices, m)?)?;
     
     m.add("CHECKMATE_SCORE", eval::CHECKMATE_SCORE)?;
     m.add("STALEMATE_SCORE", eval::STALEMATE_SCORE)?;
     m.add("BOARD_SIZE", BOARD_SIZE)?;
     m.add("EVAL_VERSION", eval::EVAL_VERSION)?;
     m.add("SCHEMA_VERSION", cache::SCHEMA_VERSION)?;
+    m.add("ENCODE_PLANES", encode::PLANES)?;
+    m.add("ENCODE_INPUT_SIZE", encode::INPUT_SIZE)?;
+    m.add("ACTION_PLANES", encode::ACTION_PLANES)?;
+    m.add("ACTION_SPACE", encode::ACTION_SPACE)?;
     
     Ok(())
 }
