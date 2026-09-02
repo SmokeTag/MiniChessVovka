@@ -172,6 +172,10 @@ tests/                  ← Test suite
 | Doc | Content |
 |-----|---------|
 | [Evaluation Strategy](docs/evaluation_strategy.md) | Detailed scoring heuristics |
+| [The Search](docs/SEARCH.md) | Draws, MultiPV, parallelism, and how the search is benchmarked |
+| [The Opening Book](docs/BOOK.md) | Filling the book, the staged parallel build, the on-disk schema |
+| [Book Files](docs/BOOK_FILES.md) | Which book file is which, as a cheat sheet |
+| [The Pygame GUI](docs/GUI.md) | Front-end invariants and the user-visible search settings |
 | [Parallel Search](docs/PARALLEL_SEARCH.md) | Record of the root-parallel search evaluation |
 
 ## 📝 License
@@ -357,6 +361,10 @@ tests/                  ← Тесты
 | Документ | Содержание |
 |----------|------------|
 | [Стратегия оценки](docs/evaluation_strategy.md) | Подробные эвристики оценки |
+| [Поиск](docs/SEARCH.md) | Ничьи, MultiPV, параллелизм и замеры поиска |
+| [Дебютная книга](docs/BOOK.md) | Наполнение книги, поэтапная параллельная сборка, схема на диске |
+| [Файлы книги](docs/BOOK_FILES.md) | Какой файл книги за что отвечает — шпаргалка |
+| [Интерфейс Pygame](docs/GUI.md) | Инварианты интерфейса и видимые пользователю настройки поиска |
 | [Параллельный поиск](docs/PARALLEL_SEARCH.md) | Отчёт об оценке параллельного поиска |
 
 ## 📝 Лицензия
