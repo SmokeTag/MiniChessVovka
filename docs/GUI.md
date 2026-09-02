@@ -104,7 +104,10 @@ defaults to the search, and the setting persists in `gui_settings.json`.
   The network has no depth, so `player_label` says "network" rather than naming a search
   that did not happen. The score is the value head put back through
   `VALUE_SCALE * atanh(v)` and flipped into the white-relative convention everything
-  else in the app speaks.
+  else in the app speaks — **but it is not a trustworthy position assessment**: the value
+  head carries a side-to-move bias from its teacher set and reads about +178cp at the
+  opening position, where the search says +6. Read the moves, not the number
+  (`docs/ZERO.md`).
 - **Hints always use the search.** The network has no depth to vary and no ranked lines
   to show, so the hint path is untouched.
 - **It needed a grid row of its own.** The controls grid is eight rows; rows 3-5 are the

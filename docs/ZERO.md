@@ -190,6 +190,18 @@ measure before changing the constant. The scale is stamped into every checkpoint
 the value head's output is only interpretable against the scale its targets were built
 with, and phase 3 reads values back out of it.
 
+**The value head inherits a side-to-move bias, and the GUI's eval readout shows it.**
+The teacher set's mean value target is **+0.194**: a walk that reaches an interesting
+position usually got there because somebody just blundered, so the side to move is
+genuinely better on average. The head learns that prior. At the opening position the
+shipped bootstrap net reads **+178cp** for White where depth-8 says +6 (v0.1, trained
+before the scale fix, read +395). The moves are worth more than the score -- do not
+present this eval as a position assessment.
+
+It is not worth chasing with the teacher: the bias is a property of walked positions, and
+phase 4 self-play visits balanced ones by construction. Worth re-measuring there rather
+than correcting here.
+
 Note that engine-weighting the walks did **not** fix the imbalance -- the engine-guided
 half of the set has a median non-mate `|score|` of 1064 against the random half's 1038.
 Depth-3 walk moves are not strong enough to keep a crazyhouse game level.
