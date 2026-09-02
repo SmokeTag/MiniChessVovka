@@ -796,6 +796,53 @@ fn is_move_still_legal(py: Python<'_>, gs: &mut PyGameState, m: &Bound<'_, PyAny
 }
 
 #[pyfunction]
+fn set_search_knobs(kwargs: &Bound<'_, PyDict>) -> PyResult<()> {
+    let mut k = search::knobs();
+    for (key, val) in kwargs.iter() {
+        let name: String = key.extract()?;
+        match name.as_str() {
+            "null_move" => k.null_move = val.extract()?,
+            "lmr" => k.lmr = val.extract()?,
+            "use_tt" => k.use_tt = val.extract()?,
+            "use_book" => k.use_book = val.extract()?,
+            "delta_margin" => k.delta_margin = val.extract()?,
+            "order_seed" => k.order_seed = val.extract()?,
+            other => return Err(PyValueError::new_err(format!("unknown search knob {:?}", other))),
+        }
+    }
+    search::set_knobs(k);
+    Ok(())
+}
+
+#[pyfunction]
+fn reset_search_knobs() {
+    search::set_knobs(search::DEFAULT_KNOBS);
+}
+
+#[pyfunction]
+fn get_search_knobs(py: Python<'_>) -> PyResult<PyObject> {
+    let k = search::knobs();
+    let d = PyDict::new(py);
+    d.set_item("null_move", k.null_move)?;
+    d.set_item("lmr", k.lmr)?;
+    d.set_item("use_tt", k.use_tt)?;
+    d.set_item("use_book", k.use_book)?;
+    d.set_item("delta_margin", k.delta_margin)?;
+    d.set_item("order_seed", k.order_seed)?;
+    Ok(d.into())
+}
+
+#[pyfunction]
+fn last_search_nodes(py: Python<'_>) -> PyResult<PyObject> {
+    let (nodes, qnodes) = search::last_search_nodes();
+    let tup = PyTuple::new(py, &[
+        nodes.into_pyobject(py)?.into_any().unbind(),
+        qnodes.into_pyobject(py)?.into_any().unbind(),
+    ])?;
+    Ok(tup.into())
+}
+
+#[pyfunction]
 fn parse_move_string(py: Python<'_>, s: &str) -> PyResult<PyObject> {
     match search::parse_move_repr(s) {
         Some(m) => Ok(rust_move_to_py(py, m)),
@@ -829,6 +876,10 @@ fn minichess_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(from_fen, m)?)?;
     m.add_function(wrap_pyfunction!(is_move_still_legal, m)?)?;
     m.add_function(wrap_pyfunction!(parse_move_string, m)?)?;
+    m.add_function(wrap_pyfunction!(set_search_knobs, m)?)?;
+    m.add_function(wrap_pyfunction!(reset_search_knobs, m)?)?;
+    m.add_function(wrap_pyfunction!(get_search_knobs, m)?)?;
+    m.add_function(wrap_pyfunction!(last_search_nodes, m)?)?;
     
     m.add("CHECKMATE_SCORE", eval::CHECKMATE_SCORE)?;
     m.add("STALEMATE_SCORE", eval::STALEMATE_SCORE)?;

@@ -1,0 +1,1136 @@
+{
+  "header": {
+    "started": "2026-09-02 00:24:17",
+    "uptime": "00:24:17 up 4 days,  6:24,  1 user,  load average: 1.70, 3.41, 4.11",
+    "load_average_at_start": [
+      1.69970703125,
+      3.41064453125,
+      4.10595703125
+    ],
+    "nproc": 24,
+    "python": ".venv-bench/bin/python",
+    "platform": "Linux-7.1.9-arch1-2-x86_64-with-glibc2.44",
+    "depths": [
+      6,
+      7,
+      8
+    ],
+    "modes": [
+      "seq"
+    ],
+    "repeats": 3,
+    "par_min_depth": null,
+    "positions": [
+      "opening_start",
+      "opening_early",
+      "middlegame_hand_a",
+      "middlegame_hand_b",
+      "tactical_check_a",
+      "tactical_check_b",
+      "endgame_thin_a",
+      "endgame_thin_b"
+    ],
+    "load_warn_threshold": 4.0,
+    "finished": "2026-09-02 00:25:11",
+    "uptime_at_end": "00:25:11 up 4 days,  6:25,  1 user,  load average: 1.43, 3.05, 3.94",
+    "load_average_at_end": [
+      1.43115234375,
+      3.04833984375,
+      3.94091796875
+    ]
+  },
+  "results": [
+    {
+      "position": "opening_start",
+      "depth": 6,
+      "mode": "seq",
+      "seconds": 0.03429012099513784,
+      "best_move": [
+        [
+          5,
+          2
+        ],
+        [
+          4,
+          4
+        ],
+        null
+      ],
+      "best_move_str": "c1e2",
+      "score": 6,
+      "legal_moves": 15,
+      "side_to_move": "w",
+      "pid": 343497,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.06826114654541016,
+      "load_before": [
+        1.69970703125,
+        3.41064453125,
+        4.10595703125
+      ],
+      "load_after": [
+        1.69970703125,
+        3.41064453125,
+        4.10595703125
+      ],
+      "seconds_samples": [
+        0.03471134399296716,
+        0.03429012099513784,
+        0.03437518799910322
+      ],
+      "seconds_min": 0.03429012099513784,
+      "seconds_max": 0.03471134399296716,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.69970703125,
+      "load_suspect": false,
+      "phase": "opening"
+    },
+    {
+      "position": "opening_start",
+      "depth": 7,
+      "mode": "seq",
+      "seconds": 0.10020096495281905,
+      "best_move": [
+        [
+          5,
+          2
+        ],
+        [
+          4,
+          4
+        ],
+        null
+      ],
+      "best_move_str": "c1e2",
+      "score": 0,
+      "legal_moves": 15,
+      "side_to_move": "w",
+      "pid": 343500,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.13442420959472656,
+      "load_before": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "load_after": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "seconds_samples": [
+        0.10077109100529924,
+        0.10020096495281905,
+        0.10070036997785792
+      ],
+      "seconds_min": 0.10020096495281905,
+      "seconds_max": 0.10077109100529924,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.69970703125,
+      "load_suspect": false,
+      "phase": "opening"
+    },
+    {
+      "position": "opening_start",
+      "depth": 8,
+      "mode": "seq",
+      "seconds": 0.2622271880391054,
+      "best_move": [
+        [
+          5,
+          1
+        ],
+        [
+          3,
+          1
+        ],
+        null
+      ],
+      "best_move_str": "b1b3",
+      "score": 6,
+      "legal_moves": 15,
+      "side_to_move": "w",
+      "pid": 343502,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.29622340202331543,
+      "load_before": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "load_after": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "seconds_samples": [
+        0.2622271880391054,
+        0.26234668400138617,
+        0.2625323469983414
+      ],
+      "seconds_min": 0.2622271880391054,
+      "seconds_max": 0.2625323469983414,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.6435546875,
+      "load_suspect": false,
+      "phase": "opening"
+    },
+    {
+      "position": "opening_early",
+      "depth": 6,
+      "mode": "seq",
+      "seconds": 0.01207091601099819,
+      "best_move": [
+        [
+          5,
+          2
+        ],
+        [
+          3,
+          3
+        ],
+        null
+      ],
+      "best_move_str": "c1d3",
+      "score": 2310,
+      "legal_moves": 26,
+      "side_to_move": "w",
+      "pid": 343519,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.045519113540649414,
+      "load_before": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "load_after": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "seconds_samples": [
+        0.012085410009603947,
+        0.012077193008735776,
+        0.01207091601099819
+      ],
+      "seconds_min": 0.01207091601099819,
+      "seconds_max": 0.012085410009603947,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.6435546875,
+      "load_suspect": false,
+      "phase": "opening"
+    },
+    {
+      "position": "opening_early",
+      "depth": 7,
+      "mode": "seq",
+      "seconds": 0.02860823000082746,
+      "best_move": [
+        [
+          5,
+          2
+        ],
+        [
+          3,
+          3
+        ],
+        null
+      ],
+      "best_move_str": "c1d3",
+      "score": 2431,
+      "legal_moves": 26,
+      "side_to_move": "w",
+      "pid": 343522,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.062075138092041016,
+      "load_before": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "load_after": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "seconds_samples": [
+        0.029226393962744623,
+        0.028698053036350757,
+        0.02860823000082746
+      ],
+      "seconds_min": 0.02860823000082746,
+      "seconds_max": 0.029226393962744623,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.6435546875,
+      "load_suspect": false,
+      "phase": "opening"
+    },
+    {
+      "position": "opening_early",
+      "depth": 8,
+      "mode": "seq",
+      "seconds": 0.06331221701111645,
+      "best_move": [
+        [
+          5,
+          2
+        ],
+        [
+          3,
+          3
+        ],
+        null
+      ],
+      "best_move_str": "c1d3",
+      "score": 1000000,
+      "legal_moves": 26,
+      "side_to_move": "w",
+      "pid": 343524,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.09839367866516113,
+      "load_before": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "load_after": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "seconds_samples": [
+        0.06344801397062838,
+        0.06331221701111645,
+        0.06362742697820067
+      ],
+      "seconds_min": 0.06331221701111645,
+      "seconds_max": 0.06362742697820067,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.6435546875,
+      "load_suspect": false,
+      "phase": "opening"
+    },
+    {
+      "position": "middlegame_hand_a",
+      "depth": 6,
+      "mode": "seq",
+      "seconds": 0.30620537500362843,
+      "best_move": [
+        "drop",
+        "wB",
+        [
+          3,
+          1
+        ]
+      ],
+      "best_move_str": "B@b3",
+      "score": 1573,
+      "legal_moves": 73,
+      "side_to_move": "w",
+      "pid": 343526,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.3418896198272705,
+      "load_before": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "load_after": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "seconds_samples": [
+        0.30620537500362843,
+        0.30815839901333675,
+        0.3102062039542943
+      ],
+      "seconds_min": 0.30620537500362843,
+      "seconds_max": 0.3102062039542943,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.6435546875,
+      "load_suspect": false,
+      "phase": "middlegame, pieces in hand"
+    },
+    {
+      "position": "middlegame_hand_a",
+      "depth": 7,
+      "mode": "seq",
+      "seconds": 0.9837585829664022,
+      "best_move": [
+        "drop",
+        "wB",
+        [
+          3,
+          1
+        ]
+      ],
+      "best_move_str": "B@b3",
+      "score": 1577,
+      "legal_moves": 73,
+      "side_to_move": "w",
+      "pid": 343548,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 1.0204613208770752,
+      "load_before": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "load_after": [
+        1.6435546875,
+        3.37060546875,
+        4.0888671875
+      ],
+      "seconds_samples": [
+        0.9837585829664022,
+        0.9925358659820631,
+        0.9883711709990166
+      ],
+      "seconds_min": 0.9837585829664022,
+      "seconds_max": 0.9925358659820631,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.67236328125,
+      "load_suspect": false,
+      "phase": "middlegame, pieces in hand"
+    },
+    {
+      "position": "middlegame_hand_a",
+      "depth": 8,
+      "mode": "seq",
+      "seconds": 3.9492256640223786,
+      "best_move": [
+        "drop",
+        "wB",
+        [
+          3,
+          1
+        ]
+      ],
+      "best_move_str": "B@b3",
+      "score": 1781,
+      "legal_moves": 73,
+      "side_to_move": "w",
+      "pid": 343567,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 3.9856674671173096,
+      "load_before": [
+        1.67236328125,
+        3.34765625,
+        4.07763671875
+      ],
+      "load_after": [
+        1.67236328125,
+        3.34765625,
+        4.07763671875
+      ],
+      "seconds_samples": [
+        3.9492256640223786,
+        3.955574762017932,
+        3.9925764810177498
+      ],
+      "seconds_min": 3.9492256640223786,
+      "seconds_max": 3.9925764810177498,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.69873046875,
+      "load_suspect": false,
+      "phase": "middlegame, pieces in hand"
+    },
+    {
+      "position": "middlegame_hand_b",
+      "depth": 6,
+      "mode": "seq",
+      "seconds": 0.0005302759818732738,
+      "best_move": [
+        "drop",
+        "bN",
+        [
+          3,
+          0
+        ]
+      ],
+      "best_move_str": "N@a3",
+      "score": -1000000,
+      "legal_moves": 43,
+      "side_to_move": "b",
+      "pid": 343660,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.03664731979370117,
+      "load_before": [
+        1.642578125,
+        3.2861328125,
+        4.0498046875
+      ],
+      "load_after": [
+        1.642578125,
+        3.2861328125,
+        4.0498046875
+      ],
+      "seconds_samples": [
+        0.0005302759818732738,
+        0.0006562740309163928,
+        0.0010712529765442014
+      ],
+      "seconds_min": 0.0005302759818732738,
+      "seconds_max": 0.0010712529765442014,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.642578125,
+      "load_suspect": false,
+      "phase": "middlegame, pieces in hand"
+    },
+    {
+      "position": "middlegame_hand_b",
+      "depth": 7,
+      "mode": "seq",
+      "seconds": 0.00046809599734842777,
+      "best_move": [
+        "drop",
+        "bN",
+        [
+          3,
+          0
+        ]
+      ],
+      "best_move_str": "N@a3",
+      "score": -1000000,
+      "legal_moves": 43,
+      "side_to_move": "b",
+      "pid": 343664,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.03806495666503906,
+      "load_before": [
+        1.642578125,
+        3.2861328125,
+        4.0498046875
+      ],
+      "load_after": [
+        1.642578125,
+        3.2861328125,
+        4.0498046875
+      ],
+      "seconds_samples": [
+        0.00046809599734842777,
+        0.0006709139561280608,
+        0.00047400500625371933
+      ],
+      "seconds_min": 0.00046809599734842777,
+      "seconds_max": 0.0006709139561280608,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.642578125,
+      "load_suspect": false,
+      "phase": "middlegame, pieces in hand"
+    },
+    {
+      "position": "middlegame_hand_b",
+      "depth": 8,
+      "mode": "seq",
+      "seconds": 0.0005651020328514278,
+      "best_move": [
+        "drop",
+        "bN",
+        [
+          3,
+          0
+        ]
+      ],
+      "best_move_str": "N@a3",
+      "score": -1000000,
+      "legal_moves": 43,
+      "side_to_move": "b",
+      "pid": 343671,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.03698229789733887,
+      "load_before": [
+        1.642578125,
+        3.2861328125,
+        4.0498046875
+      ],
+      "load_after": [
+        1.642578125,
+        3.2861328125,
+        4.0498046875
+      ],
+      "seconds_samples": [
+        0.0006806390010751784,
+        0.0007062790100462735,
+        0.0005651020328514278
+      ],
+      "seconds_min": 0.0005651020328514278,
+      "seconds_max": 0.0007062790100462735,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.642578125,
+      "load_suspect": false,
+      "phase": "middlegame, pieces in hand"
+    },
+    {
+      "position": "tactical_check_a",
+      "depth": 6,
+      "mode": "seq",
+      "seconds": 0.14404906099662185,
+      "best_move": [
+        [
+          0,
+          4
+        ],
+        [
+          1,
+          4
+        ],
+        null
+      ],
+      "best_move_str": "e6e5",
+      "score": -126,
+      "legal_moves": 8,
+      "side_to_move": "w",
+      "pid": 343691,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.18212604522705078,
+      "load_before": [
+        1.642578125,
+        3.2861328125,
+        4.0498046875
+      ],
+      "load_after": [
+        1.642578125,
+        3.2861328125,
+        4.0498046875
+      ],
+      "seconds_samples": [
+        0.14425274403765798,
+        0.14447053603362292,
+        0.14404906099662185
+      ],
+      "seconds_min": 0.14404906099662185,
+      "seconds_max": 0.14447053603362292,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.642578125,
+      "load_suspect": false,
+      "phase": "sharp tactical, side to move in check"
+    },
+    {
+      "position": "tactical_check_a",
+      "depth": 7,
+      "mode": "seq",
+      "seconds": 0.821738637983799,
+      "best_move": [
+        [
+          0,
+          4
+        ],
+        [
+          1,
+          4
+        ],
+        null
+      ],
+      "best_move_str": "e6e5",
+      "score": -140,
+      "legal_moves": 8,
+      "side_to_move": "w",
+      "pid": 343692,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.8584167957305908,
+      "load_before": [
+        1.642578125,
+        3.2861328125,
+        4.0498046875
+      ],
+      "load_after": [
+        1.642578125,
+        3.2861328125,
+        4.0498046875
+      ],
+      "seconds_samples": [
+        0.821738637983799,
+        0.8237273919512518,
+        0.8241439980338328
+      ],
+      "seconds_min": 0.821738637983799,
+      "seconds_max": 0.8241439980338328,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.642578125,
+      "load_suspect": false,
+      "phase": "sharp tactical, side to move in check"
+    },
+    {
+      "position": "tactical_check_a",
+      "depth": 8,
+      "mode": "seq",
+      "seconds": 1.532188850978855,
+      "best_move": [
+        [
+          0,
+          4
+        ],
+        [
+          1,
+          4
+        ],
+        null
+      ],
+      "best_move_str": "e6e5",
+      "score": -140,
+      "legal_moves": 8,
+      "side_to_move": "w",
+      "pid": 343738,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 1.5682353973388672,
+      "load_before": [
+        1.5908203125,
+        3.248046875,
+        4.033203125
+      ],
+      "load_after": [
+        1.54345703125,
+        3.21044921875,
+        4.0166015625
+      ],
+      "seconds_samples": [
+        1.535785103973467,
+        1.545871201029513,
+        1.532188850978855
+      ],
+      "seconds_min": 1.532188850978855,
+      "seconds_max": 1.545871201029513,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.5908203125,
+      "load_suspect": false,
+      "phase": "sharp tactical, side to move in check"
+    },
+    {
+      "position": "tactical_check_b",
+      "depth": 6,
+      "mode": "seq",
+      "seconds": 0.02841733698733151,
+      "best_move": [
+        [
+          0,
+          5
+        ],
+        [
+          0,
+          4
+        ],
+        null
+      ],
+      "best_move_str": "f6e6",
+      "score": -2401,
+      "legal_moves": 9,
+      "side_to_move": "b",
+      "pid": 343755,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.06357216835021973,
+      "load_before": [
+        1.54345703125,
+        3.21044921875,
+        4.0166015625
+      ],
+      "load_after": [
+        1.54345703125,
+        3.21044921875,
+        4.0166015625
+      ],
+      "seconds_samples": [
+        0.02908958401530981,
+        0.029035302984993905,
+        0.02841733698733151
+      ],
+      "seconds_min": 0.02841733698733151,
+      "seconds_max": 0.02908958401530981,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.54345703125,
+      "load_suspect": false,
+      "phase": "sharp tactical, side to move in check"
+    },
+    {
+      "position": "tactical_check_b",
+      "depth": 7,
+      "mode": "seq",
+      "seconds": 0.07925034500658512,
+      "best_move": [
+        [
+          0,
+          5
+        ],
+        [
+          0,
+          4
+        ],
+        null
+      ],
+      "best_move_str": "f6e6",
+      "score": -2981,
+      "legal_moves": 9,
+      "side_to_move": "b",
+      "pid": 343757,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.11487746238708496,
+      "load_before": [
+        1.54345703125,
+        3.21044921875,
+        4.0166015625
+      ],
+      "load_after": [
+        1.54345703125,
+        3.21044921875,
+        4.0166015625
+      ],
+      "seconds_samples": [
+        0.07951804297044873,
+        0.07925034500658512,
+        0.08027470402885228
+      ],
+      "seconds_min": 0.07925034500658512,
+      "seconds_max": 0.08027470402885228,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.54345703125,
+      "load_suspect": false,
+      "phase": "sharp tactical, side to move in check"
+    },
+    {
+      "position": "tactical_check_b",
+      "depth": 8,
+      "mode": "seq",
+      "seconds": 0.14740570000139996,
+      "best_move": [
+        [
+          0,
+          5
+        ],
+        [
+          0,
+          4
+        ],
+        null
+      ],
+      "best_move_str": "f6e6",
+      "score": -3478,
+      "legal_moves": 9,
+      "side_to_move": "b",
+      "pid": 343773,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.18464446067810059,
+      "load_before": [
+        1.54345703125,
+        3.21044921875,
+        4.0166015625
+      ],
+      "load_after": [
+        1.54345703125,
+        3.21044921875,
+        4.0166015625
+      ],
+      "seconds_samples": [
+        0.1482116460101679,
+        0.14779136498691514,
+        0.14740570000139996
+      ],
+      "seconds_min": 0.14740570000139996,
+      "seconds_max": 0.1482116460101679,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.54345703125,
+      "load_suspect": false,
+      "phase": "sharp tactical, side to move in check"
+    },
+    {
+      "position": "endgame_thin_a",
+      "depth": 6,
+      "mode": "seq",
+      "seconds": 0.3439369650441222,
+      "best_move": [
+        "drop",
+        "wN",
+        [
+          1,
+          1
+        ]
+      ],
+      "best_move_str": "N@b5",
+      "score": 1194,
+      "legal_moves": 75,
+      "side_to_move": "w",
+      "pid": 343775,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.3820514678955078,
+      "load_before": [
+        1.54345703125,
+        3.21044921875,
+        4.0166015625
+      ],
+      "load_after": [
+        1.54345703125,
+        3.21044921875,
+        4.0166015625
+      ],
+      "seconds_samples": [
+        0.34457504004240036,
+        0.3439369650441222,
+        0.34477813803823665
+      ],
+      "seconds_min": 0.3439369650441222,
+      "seconds_max": 0.34477813803823665,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.54345703125,
+      "load_suspect": false,
+      "phase": "endgame, thin board with drop material"
+    },
+    {
+      "position": "endgame_thin_a",
+      "depth": 7,
+      "mode": "seq",
+      "seconds": 1.4175669500255026,
+      "best_move": [
+        "drop",
+        "wN",
+        [
+          1,
+          1
+        ]
+      ],
+      "best_move_str": "N@b5",
+      "score": 1313,
+      "legal_moves": 75,
+      "side_to_move": "w",
+      "pid": 343804,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 1.454291582107544,
+      "load_before": [
+        1.49951171875,
+        3.17333984375,
+        4.0
+      ],
+      "load_after": [
+        1.49951171875,
+        3.17333984375,
+        4.0
+      ],
+      "seconds_samples": [
+        1.4194658740307204,
+        1.4284058529883623,
+        1.4175669500255026
+      ],
+      "seconds_min": 1.4175669500255026,
+      "seconds_max": 1.4284058529883623,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.54345703125,
+      "load_suspect": false,
+      "phase": "endgame, thin board with drop material"
+    },
+    {
+      "position": "endgame_thin_a",
+      "depth": 8,
+      "mode": "seq",
+      "seconds": 4.909732228028588,
+      "best_move": [
+        "drop",
+        "wN",
+        [
+          1,
+          1
+        ]
+      ],
+      "best_move_str": "N@b5",
+      "score": 1313,
+      "legal_moves": 75,
+      "side_to_move": "w",
+      "pid": 343843,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 4.9471275806427,
+      "load_before": [
+        1.45947265625,
+        3.13720703125,
+        3.98388671875
+      ],
+      "load_after": [
+        1.42236328125,
+        3.1015625,
+        3.9677734375
+      ],
+      "seconds_samples": [
+        4.912325686018448,
+        4.909732228028588,
+        4.978742269973736
+      ],
+      "seconds_min": 4.909732228028588,
+      "seconds_max": 4.978742269973736,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.49951171875,
+      "load_suspect": false,
+      "phase": "endgame, thin board with drop material"
+    },
+    {
+      "position": "endgame_thin_b",
+      "depth": 6,
+      "mode": "seq",
+      "seconds": 0.16602105600759387,
+      "best_move": [
+        "drop",
+        "wR",
+        [
+          1,
+          2
+        ]
+      ],
+      "best_move_str": "R@c5",
+      "score": -27,
+      "legal_moves": 46,
+      "side_to_move": "w",
+      "pid": 344169,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.20395803451538086,
+      "load_before": [
+        1.46875,
+        3.0830078125,
+        3.95703125
+      ],
+      "load_after": [
+        1.46875,
+        3.0830078125,
+        3.95703125
+      ],
+      "seconds_samples": [
+        0.16602105600759387,
+        0.16688345902366564,
+        0.166514559998177
+      ],
+      "seconds_min": 0.16602105600759387,
+      "seconds_max": 0.16688345902366564,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.46875,
+      "load_suspect": false,
+      "phase": "endgame, thin board with drop material"
+    },
+    {
+      "position": "endgame_thin_b",
+      "depth": 7,
+      "mode": "seq",
+      "seconds": 0.3967830900219269,
+      "best_move": [
+        "drop",
+        "wR",
+        [
+          1,
+          2
+        ]
+      ],
+      "best_move_str": "R@c5",
+      "score": -27,
+      "legal_moves": 46,
+      "side_to_move": "w",
+      "pid": 344188,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 0.43442320823669434,
+      "load_before": [
+        1.46875,
+        3.0830078125,
+        3.95703125
+      ],
+      "load_after": [
+        1.46875,
+        3.0830078125,
+        3.95703125
+      ],
+      "seconds_samples": [
+        0.40607996302424,
+        0.4046548280166462,
+        0.3967830900219269
+      ],
+      "seconds_min": 0.3967830900219269,
+      "seconds_max": 0.40607996302424,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.46875,
+      "load_suspect": false,
+      "phase": "endgame, thin board with drop material"
+    },
+    {
+      "position": "endgame_thin_b",
+      "depth": 8,
+      "mode": "seq",
+      "seconds": 1.339850916992873,
+      "best_move": [
+        "drop",
+        "wR",
+        [
+          1,
+          2
+        ]
+      ],
+      "best_move_str": "R@c5",
+      "score": 42,
+      "legal_moves": 46,
+      "side_to_move": "w",
+      "pid": 344189,
+      "parallel_splits": [],
+      "parallel_enabled_from_depth": null,
+      "subprocess_wall_s": 1.3767123222351074,
+      "load_before": [
+        1.46875,
+        3.0830078125,
+        3.95703125
+      ],
+      "load_after": [
+        1.43115234375,
+        3.04833984375,
+        3.94091796875
+      ],
+      "seconds_samples": [
+        1.339850916992873,
+        1.348716311971657,
+        1.3427871669991873
+      ],
+      "seconds_min": 1.339850916992873,
+      "seconds_max": 1.348716311971657,
+      "repeats": 3,
+      "failed_repeats": 0,
+      "max_load_seen": 1.46875,
+      "load_suspect": false,
+      "phase": "endgame, thin board with drop material"
+    }
+  ]
+}

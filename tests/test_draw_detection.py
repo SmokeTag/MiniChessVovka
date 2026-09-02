@@ -22,17 +22,19 @@ SHUFFLE = [((5, 0), (5, 1), None), ((0, 5), (0, 4), None),
            ((5, 1), (5, 0), None)]
 
 
-def _shuffled_position(plies=len(SHUFFLE)):
-    """White Ka1 Ra3 Nd2, Black Kf6 Nd5, after `plies` of king shuffling.
+def _shuffled_position(plies=len(SHUFFLE), knight=(4, 3)):
+    """White Ka1 Ra3 N`knight`, Black Kf6 Nd5, after `plies` of king shuffling.
 
     Nothing is attacked and no pawn is on the board, so every shuffle move is
-    reversible and the whole line stays inside one repetition window.
+    reversible and the whole line stays inside one repetition window. `knight`
+    moves White's knight to give a caller a position no other test shares -- the
+    book is process-global, so a hash another test has filed is a book hit here.
     """
     gs = GameState()
     gs.board = [['.' for _ in range(6)] for _ in range(6)]
     gs.board[5][0] = 'K'
     gs.board[3][0] = 'R'
-    gs.board[4][3] = 'N'
+    gs.board[knight[0]][knight[1]] = 'N'
     gs.board[0][5] = 'k'
     gs.board[1][3] = 'n'
     gs.hands = {'w': {}, 'b': {}}
@@ -77,13 +79,15 @@ def test_a_history_repetition_is_kept_out_of_the_book():
     would be served to every future game that reaches it by any other route.
     """
     ai.discard_pending_book_writes()
-    ai.find_best_move_with_score(_shuffled_position(), depth=4)
+    gs = _shuffled_position(knight=(4, 4))
+    assert not ai.book_has_position(gs), "the position must be unknown or the search is a book hit"
+    ai.find_best_move_with_score(gs, depth=4)
     assert ai.pending_book_writes() == 0
 
-    ordinary = GameState()
-    ordinary.setup_initial_board()
-    ai.find_best_move_with_score(ordinary, depth=3)
-    assert ai.pending_book_writes() > 0, "an ordinary search should still file a row"
+    blind = _shuffled_position(knight=(4, 4))
+    blind._reset_position_history()
+    ai.find_best_move_with_score(blind, depth=4)
+    assert ai.pending_book_writes() > 0, "the same position without the history is an ordinary search"
     ai.discard_pending_book_writes()
 
 

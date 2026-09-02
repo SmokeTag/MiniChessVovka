@@ -460,6 +460,58 @@ In `compare.py`, best-move **agreement** is the headline, not speed: a parallel 
 different move with a different score is a regression regardless of how fast it was, and exits
 non-zero.
 
+### Measuring accuracy, not just speed
+
+`run_bench.py` says how fast, and on its own it cannot judge LMR, null move or delta pruning at all:
+each of those is faster *because* it is wrong more often. `bench/accuracy.py` says how wrong, against
+an exact reference — the same search with null move, LMR, delta pruning and the TT switched off,
+which is plain alpha-beta over the same depth-N + quiescence tree and so returns that tree's true
+minimax value.
+
+```bash
+./venv/bin/python bench/accuracy.py reference --depth 8 --jobs 4     # fill the reference cache
+./venv/bin/python bench/accuracy.py run --depth 8 --seeds 8 --configs shipped,lmr_off
+./venv/bin/python bench/accuracy.py report bench/results/lmr_confirm.json
+./venv/bin/python bench/accuracy.py selfcheck                        # reference is ordering-invariant
+./venv/bin/python bench/gen_accuracy_positions.py --append --scale 2 # widen the suite
+```
+
+- **Pair over move orderings AND over the whole position sample.** `--seeds N` re-runs every position
+  under N value-neutral orderings — a seeded tiebreak between moves the ordering scores equally, which
+  an exact search cannot notice and only the heuristics can. One ordering cannot resolve an accuracy
+  change and neither can a handful of positions: the same ablation has read −13.5 ± 9.4 on 16
+  positions and −82.9 ± 4.3 on 48. Error bars are the standard error over **positions**, and deltas
+  are paired per position.
+- **Regret is the metric, not score error**: the cp the chosen move gives away against the exact value
+  of the position. A search that misreports the score and still plays the best move has lost nothing.
+  `best moves` counts regret == 0, and it is by far the most stable of the three — regret itself is
+  heavy-tailed, so read its error bar before believing a difference.
+- **Node counts are the speed number here**, not seconds: many searches share one process, and
+  `--jobs` > 1 makes the clock meaningless. Wall clock is `run_bench.py`'s job.
+- **The reference costs ~1 minute of CPU per position at depth 8**, so it is cached by FEN in the
+  committed `bench/results/reference_d8.json`. It carries `eval_version` and refuses to load against
+  another one; delete it if anything below the search changes — eval, quiescence, move generation.
+- **Positions whose exact value is a mate are dropped** (an error against ±1e6 is not a number you can
+  average) and per-cell error is capped at 2000cp, which is why `accuracy_positions.json` holds 112
+  positions to leave 77 measurable ones.
+- The book is off in every search here (`use_book=False`), so nothing reads or writes `book.db`.
+
+`search::Knobs` is what makes any of it possible: six switches — `null_move`, `lmr`, `use_tt`,
+`use_book`, `delta_margin`, `order_seed` — snapshotted into `SearchState` once per search and read
+from there, never per node and never from a lock. `DEFAULT_KNOBS` is exactly what ships. From Python:
+`set_search_knobs({...})`, `reset_search_knobs()`, `get_search_knobs()`, and `last_search_nodes()`.
+**They are ablations, not tuning.** The numbers that shape the search are `const`s at the top of
+`search.rs` — `DELTA_MARGIN`, `LMR_MIN_MOVE`, `LMR_MIN_DEPTH` — exactly as the eval's numbers are
+`const`s at the top of `eval.rs`, so sweeping one means editing it, rebuilding, and reporting against
+a results file saved from the old build. Nothing in the front ends touches a knob.
+
+LMR itself, measured that way over 77 positions × 16 orderings at depth 8: it reduces from the
+**9th** move (`LMR_MIN_MOVE`), and `is_noisy_move` — which exists only to say what LMR may not
+reduce — counts a drop as noisy only **next to the enemy king**, the same test quiescence uses. Both
+numbers were measured, and both are crazyhouse-specific: reducing from the 5th move cost 2.75 ± 1.64
+best moves of 77, and exempting every drop meant LMR did almost nothing in exactly the positions
+where the branching factor is worst.
+
 ## Gotchas
 
 - `bot_start.sh` rewrites `play_online.py` in place with `sed -i ''` to flip rated/casual — BSD syntax

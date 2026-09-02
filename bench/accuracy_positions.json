@@ -1,0 +1,1128 @@
+{
+  "note": "Accuracy suite for bench/accuracy.py. FENs only; see the module docstring in bench/gen_accuracy_positions.py.",
+  "walk_depth": 3,
+  "seed": 20260902,
+  "games": 60,
+  "positions": [
+    {
+      "fen": "2b2k/5p/2n3/1B1N2/P5/KR2r1[] w",
+      "ply": 4,
+      "side_to_move": "w",
+      "legal_moves": 16,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 12,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2bn1k/5p/1R4/1Br3/P5/K1N3[] w",
+      "ply": 4,
+      "side_to_move": "w",
+      "legal_moves": 18,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 23,
+      "bucket": "empty"
+    },
+    {
+      "fen": "3nrk/5p/6/1N3b/P5/K1RB2[] w",
+      "ply": 4,
+      "side_to_move": "w",
+      "legal_moves": 16,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 58,
+      "bucket": "empty"
+    },
+    {
+      "fen": "4rk/5p/b1n3/6/P3R1/K1NB2[] w",
+      "ply": 4,
+      "side_to_move": "w",
+      "legal_moves": 16,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 31,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2bn1k/5p/4r1/1B1N2/PR4/K5[] b",
+      "ply": 5,
+      "side_to_move": "b",
+      "legal_moves": 16,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 0,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2bn1k/r4p/5N/1B4/P5/KR4[] b",
+      "ply": 5,
+      "side_to_move": "b",
+      "legal_moves": 17,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 2,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2bn1k/5p/1R4/2b1r1/P5/1KN3[] w",
+      "ply": 6,
+      "side_to_move": "w",
+      "legal_moves": 14,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 7,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2bn1k/5p/6/1B1N2/PR2r1/K5[] w",
+      "ply": 6,
+      "side_to_move": "w",
+      "legal_moves": 19,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 1,
+      "bucket": "empty"
+    },
+    {
+      "fen": "3n1k/1b3p/3Rr1/1N4/P5/K2B2[] w",
+      "ply": 6,
+      "side_to_move": "w",
+      "legal_moves": 18,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 4,
+      "bucket": "empty"
+    },
+    {
+      "fen": "3n1k/1b3p/B4N/2r3/PR4/K5[] b",
+      "ply": 7,
+      "side_to_move": "b",
+      "legal_moves": 20,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 30,
+      "bucket": "empty"
+    },
+    {
+      "fen": "3n1k/4r1/4bp/P5/6/KRN2B[] b",
+      "ply": 7,
+      "side_to_move": "b",
+      "legal_moves": 19,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 25,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2b2k/1R3p/3n1r/6/P5/K1NB2[] w",
+      "ply": 8,
+      "side_to_move": "w",
+      "legal_moves": 21,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 15,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2bn1k/5p/3bR1/4r1/P5/1KN3[] w",
+      "ply": 8,
+      "side_to_move": "w",
+      "legal_moves": 10,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 7,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2Bn1k/2B2p/4r1/6/P3N1/KR4[] b",
+      "ply": 9,
+      "side_to_move": "b",
+      "legal_moves": 14,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 27,
+      "bucket": "empty"
+    },
+    {
+      "fen": "3nk1/5p/6/3NB1/PK4/R2Br1[] b",
+      "ply": 9,
+      "side_to_move": "b",
+      "legal_moves": 10,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 53,
+      "bucket": "empty"
+    },
+    {
+      "fen": "4rk/5p/b5/P2Nn1/6/KR2b1[] w",
+      "ply": 10,
+      "side_to_move": "w",
+      "legal_moves": 18,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 10,
+      "bucket": "empty"
+    },
+    {
+      "fen": "5k/1nN2p/4b1/P2r2/6/R1KB2[] b",
+      "ply": 11,
+      "side_to_move": "b",
+      "legal_moves": 19,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 42,
+      "bucket": "empty"
+    },
+    {
+      "fen": "B2n1k/5p/B3r1/6/P1N3/KR4[] b",
+      "ply": 11,
+      "side_to_move": "b",
+      "legal_moves": 15,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 0,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2b2k/1n2rp/3R2/6/P5/1KN2B[] w",
+      "ply": 12,
+      "side_to_move": "w",
+      "legal_moves": 21,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 7,
+      "bucket": "empty"
+    },
+    {
+      "fen": "5k/r3rp/3Bn1/1N4/PK4/4b1[] w",
+      "ply": 12,
+      "side_to_move": "w",
+      "legal_moves": 16,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 19,
+      "bucket": "empty"
+    },
+    {
+      "fen": "1BBn1k/5p/6/6/PKn1r1/1R4[] b",
+      "ply": 13,
+      "side_to_move": "b",
+      "legal_moves": 19,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 27,
+      "bucket": "empty"
+    },
+    {
+      "fen": "1n4/2Rb1p/3kr1/PB1N2/6/1K4[] w",
+      "ply": 14,
+      "side_to_move": "w",
+      "legal_moves": 27,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 13,
+      "bucket": "empty"
+    },
+    {
+      "fen": "6/5p/n1N2k/6/P1BR2/KB2r1[] b",
+      "ply": 15,
+      "side_to_move": "b",
+      "legal_moves": 14,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 11,
+      "bucket": "empty"
+    },
+    {
+      "fen": "4bk/5p/2n3/4rB/Pr4/K1N3[] w",
+      "ply": 16,
+      "side_to_move": "w",
+      "legal_moves": 9,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 33,
+      "bucket": "empty"
+    },
+    {
+      "fen": "3N2/4kp/4Nb/3r2/PK4/R2B2[] b",
+      "ply": 17,
+      "side_to_move": "b",
+      "legal_moves": 17,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 53,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2b2k/2K2p/6/1Nb3/P1rr2/1n4[] w",
+      "ply": 18,
+      "side_to_move": "w",
+      "legal_moves": 9,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 25,
+      "bucket": "empty"
+    },
+    {
+      "fen": "B3k1/2r2p/b3n1/4R1/P1n3/1K4[] b",
+      "ply": 19,
+      "side_to_move": "b",
+      "legal_moves": 21,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 41,
+      "bucket": "empty"
+    },
+    {
+      "fen": "1Kb2k/5p/6/R5/P1rbn1/1n4[] b",
+      "ply": 23,
+      "side_to_move": "b",
+      "legal_moves": 27,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 25,
+      "bucket": "empty"
+    },
+    {
+      "fen": "3nk1/5p/bn1r2/b2r2/P5/K5[] b",
+      "ply": 23,
+      "side_to_move": "b",
+      "legal_moves": 29,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 56,
+      "bucket": "empty"
+    },
+    {
+      "fen": "4k1/5p/1n1Rn1/1bB3/P5/K3R1[] b",
+      "ply": 25,
+      "side_to_move": "b",
+      "legal_moves": 15,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 30,
+      "bucket": "empty"
+    },
+    {
+      "fen": "nRr1B1/1B2kp/6/P5/K5/5N[] b",
+      "ply": 27,
+      "side_to_move": "b",
+      "legal_moves": 17,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 10,
+      "bucket": "empty"
+    },
+    {
+      "fen": "1b3k/2r2p/4b1/1K2p1/3rN1/2N3[] w",
+      "ply": 28,
+      "side_to_move": "w",
+      "legal_moves": 8,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 35,
+      "bucket": "empty"
+    },
+    {
+      "fen": "3n2/1R4/1B3k/6/PKn1Bp/1R4[] b",
+      "ply": 33,
+      "side_to_move": "b",
+      "legal_moves": 15,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 57,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2N1RB/3rn1/2B1kp/1K4/P5/6[] w",
+      "ply": 34,
+      "side_to_move": "w",
+      "legal_moves": 20,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 7,
+      "bucket": "empty"
+    },
+    {
+      "fen": "K1bR2/4kp/5n/6/1R1b2/1nr~3[] w",
+      "ply": 36,
+      "side_to_move": "w",
+      "legal_moves": 16,
+      "in_hand": 0,
+      "in_check": false,
+      "seed": 25,
+      "bucket": "empty"
+    },
+    {
+      "fen": "2b3/5k/3n2/6/P5/KRN3[PRb] w",
+      "ply": 6,
+      "side_to_move": "w",
+      "legal_moves": 63,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 22,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "4rk/1R3p/6/3B2/P5/K5[NBn] b",
+      "ply": 7,
+      "side_to_move": "b",
+      "legal_moves": 39,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 10,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "3R2/4kp/6/6/P3r1/K1N3[NBb] w",
+      "ply": 8,
+      "side_to_move": "w",
+      "legal_moves": 73,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 1,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "5k/1R3p/6/6/P3r1/K5[NBnb] w",
+      "ply": 10,
+      "side_to_move": "w",
+      "legal_moves": 72,
+      "in_hand": 4,
+      "in_check": false,
+      "seed": 16,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "5k/3r1p/4n1/6/P5/K4R[Bnb] w",
+      "ply": 12,
+      "side_to_move": "w",
+      "legal_moves": 40,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 5,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "5k/5p/6/2b3/PR4/KR4[NBn] b",
+      "ply": 13,
+      "side_to_move": "b",
+      "legal_moves": 39,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 10,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "3nr1/5k/6/3b2/P5/K5[Pnbr] w",
+      "ply": 14,
+      "side_to_move": "w",
+      "legal_moves": 28,
+      "in_hand": 4,
+      "in_check": false,
+      "seed": 36,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "1R4/4kp/b5/1N4/P5/1K4[NRb] b",
+      "ply": 15,
+      "side_to_move": "b",
+      "legal_moves": 36,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 4,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "1R4/5p/b4k/1N4/P5/1K4[NRb] w",
+      "ply": 16,
+      "side_to_move": "w",
+      "legal_moves": 76,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 4,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "1B3k/4rp/4n1/6/r5/2K3[Bpn] w",
+      "ply": 18,
+      "side_to_move": "w",
+      "legal_moves": 36,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 19,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "4k1/4Bp/1R4/3N2/b5/K5[NRp] w",
+      "ply": 18,
+      "side_to_move": "w",
+      "legal_moves": 82,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 21,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "6/5k/2n2p/1P4/4R1/2K1b1[Rnb] b",
+      "ply": 19,
+      "side_to_move": "b",
+      "legal_moves": 73,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 26,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "4k1/3r1p/6/P1n3/6/K1B3[Bnr] w",
+      "ply": 20,
+      "side_to_move": "w",
+      "legal_moves": 35,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 5,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "nb3k/5p/6/P5/K5/1R4[NBr] w",
+      "ply": 20,
+      "side_to_move": "w",
+      "legal_moves": 72,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 10,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "5k/1n1r1p/6/2R3/PK4/6[NBB] b",
+      "ply": 21,
+      "side_to_move": "b",
+      "legal_moves": 14,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 26,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "5k/5p/2N3/5b/1K1b2/r5[Npr] b",
+      "ply": 21,
+      "side_to_move": "b",
+      "legal_moves": 77,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 9,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "2k3/2n3/6/5P/PK4/1R4[BRnb] w",
+      "ply": 22,
+      "side_to_move": "w",
+      "legal_moves": 72,
+      "in_hand": 4,
+      "in_check": false,
+      "seed": 47,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "3n2/5k/5p/1P4/3R2/2K1b1[BRn] w",
+      "ply": 22,
+      "side_to_move": "w",
+      "legal_moves": 73,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 26,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "6/4k1/nK3N/3B2/6/r5[PPbr] b",
+      "ply": 23,
+      "side_to_move": "b",
+      "legal_moves": 75,
+      "in_hand": 4,
+      "in_check": false,
+      "seed": 39,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "5k/5p/6/2n3/PK4/N2r2[BBr] w",
+      "ply": 24,
+      "side_to_move": "w",
+      "legal_moves": 36,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 26,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "6/6/4pk/1b4/P2n2/N1K3[BRr] w",
+      "ply": 24,
+      "side_to_move": "w",
+      "legal_moves": 64,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 4,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "2k3/2n3/4P1/P5/1K4/1R4[NBRb] b",
+      "ply": 25,
+      "side_to_move": "b",
+      "legal_moves": 39,
+      "in_hand": 4,
+      "in_check": false,
+      "seed": 47,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "3b1k/5p/2R3/6/P3r1/K5[NBn] b",
+      "ply": 25,
+      "side_to_move": "b",
+      "legal_moves": 47,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 33,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "5k/4bp/2R3/6/P3r1/K5[NBn] w",
+      "ply": 26,
+      "side_to_move": "w",
+      "legal_moves": 9,
+      "in_hand": 3,
+      "in_check": true,
+      "seed": 33,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "6/3Nk1/2BN1p/6/PK4/6[BRr] w",
+      "ply": 26,
+      "side_to_move": "w",
+      "legal_moves": 86,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 7,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "5k/5p/4b1/1K4/1B1r2/r5[Npn] b",
+      "ply": 27,
+      "side_to_move": "b",
+      "legal_moves": 9,
+      "in_hand": 3,
+      "in_check": true,
+      "seed": 9,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "6/3k2/4nB/K5/P5/2r3[PNRb] b",
+      "ply": 27,
+      "side_to_move": "b",
+      "legal_moves": 51,
+      "in_hand": 4,
+      "in_check": false,
+      "seed": 54,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "2k3/6/4n1/P5/1KbR2/2R3[NBp] b",
+      "ply": 29,
+      "side_to_move": "b",
+      "legal_moves": 33,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 47,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "3nk1/1R1p1p/K5/6/1N4/6[BBR] b",
+      "ply": 29,
+      "side_to_move": "b",
+      "legal_moves": 7,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 38,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "6/4kp/1R4/2n3/b5/K4R[Npb] w",
+      "ply": 30,
+      "side_to_move": "w",
+      "legal_moves": 48,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 30,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "B1R3/4kp/6/P5/K5/5N[NRb] b",
+      "ply": 31,
+      "side_to_move": "b",
+      "legal_moves": 34,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 10,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "3k2/5B/6/6/PB4/1K2rn[PNr] w",
+      "ply": 32,
+      "side_to_move": "w",
+      "legal_moves": 6,
+      "in_hand": 3,
+      "in_check": true,
+      "seed": 22,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "3B1k/5p/6/5n/1KB3/2N3[PRR] b",
+      "ply": 35,
+      "side_to_move": "b",
+      "legal_moves": 6,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 8,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "5k/1B4/6/P5/K1R2n/5R[PNB] w",
+      "ply": 38,
+      "side_to_move": "w",
+      "legal_moves": 108,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 47,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "3k2/5R/2pN2/6/r5/1nK3[PBb] w",
+      "ply": 40,
+      "side_to_move": "w",
+      "legal_moves": 72,
+      "in_hand": 3,
+      "in_check": false,
+      "seed": 42,
+      "bucket": "heavy"
+    },
+    {
+      "fen": "2b2k/5p/2B1r1/6/P5/KRN3[N] w",
+      "ply": 4,
+      "side_to_move": "w",
+      "legal_moves": 45,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 38,
+      "bucket": "light"
+    },
+    {
+      "fen": "3nrk/5p/2b3/6/P5/KRN3[b] w",
+      "ply": 4,
+      "side_to_move": "w",
+      "legal_moves": 10,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 38,
+      "bucket": "light"
+    },
+    {
+      "fen": "2b1rk/5p/6/nB4/1K4/1RN3[p] b",
+      "ply": 5,
+      "side_to_move": "b",
+      "legal_moves": 40,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 35,
+      "bucket": "light"
+    },
+    {
+      "fen": "2Bn2/5k/5p/1N2r1/P5/KR4[B] w",
+      "ply": 6,
+      "side_to_move": "w",
+      "legal_moves": 44,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 34,
+      "bucket": "light"
+    },
+    {
+      "fen": "2b2k/5p/2B3/3N2/P5/K1R3[NR] b",
+      "ply": 7,
+      "side_to_move": "b",
+      "legal_moves": 6,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 19,
+      "bucket": "light"
+    },
+    {
+      "fen": "3n2/1R1Brk/5p/6/P5/K1N3[B] w",
+      "ply": 8,
+      "side_to_move": "w",
+      "legal_moves": 46,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 57,
+      "bucket": "light"
+    },
+    {
+      "fen": "3nrk/5p/b5/3N2/P5/1K4[Rb] w",
+      "ply": 8,
+      "side_to_move": "w",
+      "legal_moves": 40,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 36,
+      "bucket": "light"
+    },
+    {
+      "fen": "3n1k/5p/4r1/1B1b2/PR4/2K3[n] b",
+      "ply": 9,
+      "side_to_move": "b",
+      "legal_moves": 48,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 28,
+      "bucket": "light"
+    },
+    {
+      "fen": "1R4/4kp/b3r1/1N4/P5/K2B2[N] w",
+      "ply": 10,
+      "side_to_move": "w",
+      "legal_moves": 45,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 4,
+      "bucket": "light"
+    },
+    {
+      "fen": "1nb2k/5p/p5/6/N1B3/K5[Rr] w",
+      "ply": 10,
+      "side_to_move": "w",
+      "legal_moves": 40,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 49,
+      "bucket": "light"
+    },
+    {
+      "fen": "2br1k/5p/4p1/1B4/N5/1K4[Nr] b",
+      "ply": 11,
+      "side_to_move": "b",
+      "legal_moves": 40,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 35,
+      "bucket": "light"
+    },
+    {
+      "fen": "5k/5p/1r2n1/1P4/4BR/K5[Bn] w",
+      "ply": 12,
+      "side_to_move": "w",
+      "legal_moves": 42,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 5,
+      "bucket": "light"
+    },
+    {
+      "fen": "3n2/5k/5p/1P2r1/1K2N1/1R4[bb] b",
+      "ply": 13,
+      "side_to_move": "b",
+      "legal_moves": 44,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 26,
+      "bucket": "light"
+    },
+    {
+      "fen": "3nr1/6/3Nb1/K3k1/P5/3B2[Pr] b",
+      "ply": 13,
+      "side_to_move": "b",
+      "legal_moves": 45,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 51,
+      "bucket": "light"
+    },
+    {
+      "fen": "2br1k/4rp/6/1BN1p1/6/1K4[N] w",
+      "ply": 14,
+      "side_to_move": "w",
+      "legal_moves": 46,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 35,
+      "bucket": "light"
+    },
+    {
+      "fen": "6/1R1B1k/5p/B5/P5/K1N3[NR] w",
+      "ply": 14,
+      "side_to_move": "w",
+      "legal_moves": 78,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 45,
+      "bucket": "light"
+    },
+    {
+      "fen": "5k/3bnp/1R1B2/3N2/P5/K5[R] b",
+      "ply": 15,
+      "side_to_move": "b",
+      "legal_moves": 9,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 21,
+      "bucket": "light"
+    },
+    {
+      "fen": "3nk1/5p/5R/3Nb1/P5/1K1b2[r] w",
+      "ply": 16,
+      "side_to_move": "w",
+      "legal_moves": 19,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 16,
+      "bucket": "light"
+    },
+    {
+      "fen": "4Nk/5p/b5/P5/2n3/1KbR2[R] b",
+      "ply": 17,
+      "side_to_move": "b",
+      "legal_moves": 17,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 10,
+      "bucket": "light"
+    },
+    {
+      "fen": "5k/5p/N2r2/6/P3b1/K2B2[nr] b",
+      "ply": 17,
+      "side_to_move": "b",
+      "legal_moves": 76,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 15,
+      "bucket": "light"
+    },
+    {
+      "fen": "5k/1n1Brp/1R4/2B3/P5/2K3[N] w",
+      "ply": 18,
+      "side_to_move": "w",
+      "legal_moves": 54,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 23,
+      "bucket": "light"
+    },
+    {
+      "fen": "4Bk/5p/6/P5/Kn4/2r1n1[br] b",
+      "ply": 19,
+      "side_to_move": "b",
+      "legal_moves": 74,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 28,
+      "bucket": "light"
+    },
+    {
+      "fen": "6/4k1/b2Rp1/K5/P1r3/2nB2[n] b",
+      "ply": 19,
+      "side_to_move": "b",
+      "legal_moves": 49,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 24,
+      "bucket": "light"
+    },
+    {
+      "fen": "6/3R1p/3br1/P2k2/1B4/1K4[Nn] w",
+      "ply": 20,
+      "side_to_move": "w",
+      "legal_moves": 43,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 13,
+      "bucket": "light"
+    },
+    {
+      "fen": "5k/5p/Nr4/6/P1K1b1/3r2[nb] b",
+      "ply": 21,
+      "side_to_move": "b",
+      "legal_moves": 85,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 15,
+      "bucket": "light"
+    },
+    {
+      "fen": "1BB2k/5p/6/6/P2Nn1/K1R3[r] w",
+      "ply": 22,
+      "side_to_move": "w",
+      "legal_moves": 27,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 31,
+      "bucket": "light"
+    },
+    {
+      "fen": "4k1/2rn1p/b3n1/P2B2/6/1K4[r] b",
+      "ply": 23,
+      "side_to_move": "b",
+      "legal_moves": 54,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 41,
+      "bucket": "light"
+    },
+    {
+      "fen": "5k/5p/2N1b1/1K4/r2b2/r5[Np] w",
+      "ply": 24,
+      "side_to_move": "w",
+      "legal_moves": 36,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 9,
+      "bucket": "light"
+    },
+    {
+      "fen": "2Rnk1/6/B3B1/P4p/5r/K5[N] b",
+      "ply": 25,
+      "side_to_move": "b",
+      "legal_moves": 8,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 13,
+      "bucket": "light"
+    },
+    {
+      "fen": "6/4kB/n3P1/6/P5/KN3r[br] b",
+      "ply": 27,
+      "side_to_move": "b",
+      "legal_moves": 72,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 0,
+      "bucket": "light"
+    },
+    {
+      "fen": "6/1P1b2/3knR/6/2Kn2/2RB2[P] w",
+      "ply": 28,
+      "side_to_move": "w",
+      "legal_moves": 35,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 59,
+      "bucket": "light"
+    },
+    {
+      "fen": "6/4kp/1R4/1bn3/P5/K4R[Nb] b",
+      "ply": 29,
+      "side_to_move": "b",
+      "legal_moves": 48,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 30,
+      "bucket": "light"
+    },
+    {
+      "fen": "5B/2k2p/B2R2/6/P4R/K5[Nn] w",
+      "ply": 30,
+      "side_to_move": "w",
+      "legal_moves": 54,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 55,
+      "bucket": "light"
+    },
+    {
+      "fen": "5k/5p/3b2/3b2/P1R1r1/1K4[Nn] b",
+      "ply": 31,
+      "side_to_move": "b",
+      "legal_moves": 52,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 33,
+      "bucket": "light"
+    },
+    {
+      "fen": "2N2B/3r2/2B1kp/1K4/P5/6[Rn] w",
+      "ply": 32,
+      "side_to_move": "w",
+      "legal_moves": 50,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 7,
+      "bucket": "light"
+    },
+    {
+      "fen": "3rk1/5p/n3n1/P5/1b4/1K4[BR] b",
+      "ply": 33,
+      "side_to_move": "b",
+      "legal_moves": 27,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 41,
+      "bucket": "light"
+    },
+    {
+      "fen": "1n4/K1b1k1/5N/1rrBP1/6/6[p] w",
+      "ply": 34,
+      "side_to_move": "w",
+      "legal_moves": 14,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 39,
+      "bucket": "light"
+    },
+    {
+      "fen": "n1n2k/5p/2B3/1P2K1/1r4/3R2[b] w",
+      "ply": 36,
+      "side_to_move": "w",
+      "legal_moves": 21,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 52,
+      "bucket": "light"
+    },
+    {
+      "fen": "6/4kp/1r4/2R3/b5/KNr~3[Nb] b",
+      "ply": 37,
+      "side_to_move": "b",
+      "legal_moves": 57,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 30,
+      "bucket": "light"
+    },
+    {
+      "fen": "4n1/2b1kp/4b1/2K1p1/4r1/6[Nr] b",
+      "ply": 39,
+      "side_to_move": "b",
+      "legal_moves": 52,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 35,
+      "bucket": "light"
+    },
+    {
+      "fen": "5k/6/1P2p1/Kbr1n1/6/N5[br] b",
+      "ply": 39,
+      "side_to_move": "b",
+      "legal_moves": 78,
+      "in_hand": 2,
+      "in_check": false,
+      "seed": 35,
+      "bucket": "light"
+    },
+    {
+      "fen": "6/1P3k/2RBn1/6/2K3/N1B1r~1[R] b",
+      "ply": 41,
+      "side_to_move": "b",
+      "legal_moves": 12,
+      "in_hand": 1,
+      "in_check": false,
+      "seed": 4,
+      "bucket": "light"
+    }
+  ]
+}

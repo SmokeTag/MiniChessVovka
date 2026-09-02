@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -13,6 +13,52 @@ use crate::zobrist;
 
 const MAX_QUIESCENCE_DEPTH: i32 = 4;
 const DELTA_MARGIN: i32 = 900;
+const LMR_MIN_MOVE: usize = 8;
+const LMR_MIN_DEPTH: i32 = 3;
+
+#[derive(Clone, Copy)]
+pub struct Knobs {
+    pub null_move: bool,
+    pub lmr: bool,
+    pub use_tt: bool,
+    pub use_book: bool,
+    pub delta_margin: i32,
+    pub order_seed: u64,
+}
+
+pub const DEFAULT_KNOBS: Knobs = Knobs {
+    null_move: true,
+    lmr: true,
+    use_tt: true,
+    use_book: true,
+    delta_margin: DELTA_MARGIN,
+    order_seed: 0,
+};
+
+static KNOBS: Mutex<Knobs> = Mutex::new(DEFAULT_KNOBS);
+static LAST_NODES: AtomicU64 = AtomicU64::new(0);
+static LAST_QNODES: AtomicU64 = AtomicU64::new(0);
+
+pub fn knobs() -> Knobs {
+    *KNOBS.lock().unwrap()
+}
+
+pub fn set_knobs(k: Knobs) {
+    *KNOBS.lock().unwrap() = k;
+}
+
+pub fn last_search_nodes() -> (u64, u64) {
+    (LAST_NODES.load(Ordering::Relaxed), LAST_QNODES.load(Ordering::Relaxed))
+}
+
+#[inline]
+fn order_tiebreak(seed: u64, m: Move) -> u64 {
+    let mut x = seed ^ (m.data as u64).wrapping_mul(0x9E3779B97F4A7C15);
+    x ^= x >> 29;
+    x = x.wrapping_mul(0xBF58476D1CE4E5B9);
+    x ^= x >> 32;
+    x
+}
 
 #[derive(Default, Clone, Copy)]
 pub struct MixHasher(u64);
@@ -194,6 +240,9 @@ pub struct SearchState {
     pub deadline: Option<Instant>,
     pub stopped: bool,
     pub draw_used_history: bool,
+    pub knobs: Knobs,
+    pub nodes: u64,
+    pub qnodes: u64,
     nodes_since_check: u32,
 }
 
@@ -211,6 +260,9 @@ impl SearchState {
             deadline: None,
             stopped: false,
             draw_used_history: false,
+            knobs: knobs(),
+            nodes: 0,
+            qnodes: 0,
             nodes_since_check: 0,
         }
     }
@@ -358,7 +410,7 @@ fn is_center_sq(s: usize) -> bool {
 
 fn is_noisy_move(gs: &GameState, m: Move) -> bool {
     if m.is_drop() {
-        return true;
+        return is_drop_near_king(gs, m);
     }
     let to = m.to_sq();
     if gs.board[to] != Piece::Empty {
@@ -425,6 +477,7 @@ fn get_noisy_moves(gs: &mut GameState) -> Vec<Move> {
 }
 
 fn quiescence_search(gs: &mut GameState, mut alpha: i32, mut beta: i32, maximizing: bool, depth: i32, ss: &mut SearchState) -> i32 {
+    ss.qnodes += 1;
     match gs.search_draw() {
         DrawKind::None => {}
         kind => {
@@ -447,7 +500,7 @@ fn quiescence_search(gs: &mut GameState, mut alpha: i32, mut beta: i32, maximizi
         return stand_pat;
     }
 
-    let delta_margin = DELTA_MARGIN;
+    let delta_margin = ss.knobs.delta_margin;
     if maximizing && stand_pat < alpha.saturating_sub(delta_margin) {
         return alpha;
     }
@@ -492,6 +545,17 @@ fn quiescence_search(gs: &mut GameState, mut alpha: i32, mut beta: i32, maximizi
     }
 }
 
+fn sort_scored(scored: &mut Vec<(Move, i32)>, seed: u64) {
+    if seed == 0 {
+        scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    } else {
+        scored.sort_unstable_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| order_tiebreak(seed, a.0).cmp(&order_tiebreak(seed, b.0)))
+        });
+    }
+}
+
 fn minimax_ab(
     gs: &mut GameState,
     mut depth: i32,
@@ -504,6 +568,7 @@ fn minimax_ab(
     if ss.check_deadline() {
         return (evaluate_position(gs), Move::NULL);
     }
+    ss.nodes += 1;
 
     match gs.search_draw() {
         DrawKind::None => {}
@@ -529,7 +594,7 @@ fn minimax_ab(
     }
 
     let pos_hash = gs.hash;
-    let tt_entry = ss.tt_get(pos_hash);
+    let tt_entry = if ss.knobs.use_tt { ss.tt_get(pos_hash) } else { None };
 
     let mut legal_moves = gs.get_legal_moves_vec();
     if legal_moves.is_empty() {
@@ -556,7 +621,7 @@ fn minimax_ab(
     let is_pv = beta.saturating_sub(alpha) > 1;
     let opponent_color = current_color.opposite();
     let opponent_hand: u8 = gs.hands[opponent_color.index()].iter().sum();
-    if allow_null && !is_pv && depth >= null_move_r + 1 && !in_check && opponent_hand == 0 {
+    if ss.knobs.null_move && allow_null && !is_pv && depth >= null_move_r + 1 && !in_check && opponent_hand == 0 {
         gs.current_turn = gs.current_turn.opposite();
         gs.hash = gs.compute_hash();
         gs.invalidate_cache();
@@ -593,7 +658,7 @@ fn minimax_ab(
             (m, s)
         })
         .collect();
-    scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    sort_scored(&mut scored, ss.knobs.order_seed);
     for (slot, &(m, _)) in legal_moves.iter_mut().zip(scored.iter()) {
         *slot = m;
     }
@@ -601,9 +666,6 @@ fn minimax_ab(
     let orig_alpha = alpha;
     let orig_beta = beta;
     let mut best_move = Move::NULL;
-
-    let lmr_full_depth = 4;
-    let lmr_reduction_limit = 3;
 
     if maximizing {
         let mut max_eval = i32::MIN;
@@ -617,7 +679,8 @@ fn minimax_ab(
                 let (s, _) = minimax_ab(gs, depth - 1, alpha, beta, false, true, ss);
                 eval_score = s;
             } else {
-                let reduced = i >= lmr_full_depth && depth >= lmr_reduction_limit && !noisy && !gives_check;
+                let reduced = ss.knobs.lmr && i >= LMR_MIN_MOVE && depth >= LMR_MIN_DEPTH
+                    && !noisy && !gives_check;
                 let (s, _) = if reduced {
                     minimax_ab(gs, depth - 2, alpha, alpha + 1, false, true, ss)
                 } else {
@@ -657,7 +720,9 @@ fn minimax_ab(
         } else {
             TTFlag::Exact
         };
-        ss.tt.insert(pos_hash, &TTEntry { depth, score: max_eval, flag, best_move });
+        if ss.knobs.use_tt {
+            ss.tt.insert(pos_hash, &TTEntry { depth, score: max_eval, flag, best_move });
+        }
         (max_eval, best_move)
     } else {
         let mut min_eval = i32::MAX;
@@ -671,7 +736,8 @@ fn minimax_ab(
                 let (s, _) = minimax_ab(gs, depth - 1, alpha, beta, true, true, ss);
                 eval_score = s;
             } else {
-                let reduced = i >= lmr_full_depth && depth >= lmr_reduction_limit && !noisy && !gives_check;
+                let reduced = ss.knobs.lmr && i >= LMR_MIN_MOVE && depth >= LMR_MIN_DEPTH
+                    && !noisy && !gives_check;
                 let (s, _) = if reduced {
                     minimax_ab(gs, depth - 2, beta - 1, beta, true, true, ss)
                 } else {
@@ -711,7 +777,9 @@ fn minimax_ab(
         } else {
             TTFlag::Exact
         };
-        ss.tt.insert(pos_hash, &TTEntry { depth, score: min_eval, flag, best_move });
+        if ss.knobs.use_tt {
+            ss.tt.insert(pos_hash, &TTEntry { depth, score: min_eval, flag, best_move });
+        }
         (min_eval, best_move)
     }
 }
@@ -963,7 +1031,7 @@ fn ordered_root_moves(gs: &mut GameState, depth: i32, ss: &mut SearchState) -> V
             (m, s)
         })
         .collect();
-    scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    sort_scored(&mut scored, ss.knobs.order_seed);
     scored.into_iter().map(|(m, _)| m).collect()
 }
 
@@ -1049,9 +1117,12 @@ pub fn find_best_move(
     let pos_hash_str = gs.hash.to_string();
     let want_ranks = top_n.max(1) as usize;
 
-    let probed = {
+    let run_knobs = knobs();
+    let probed = if run_knobs.use_book {
         let guard = book.lock().unwrap();
         probe_book(gs, &guard, &pos_hash_str, depth, want_ranks)
+    } else {
+        None
     };
     if let Some((ranked, hit_depth)) = probed {
         eprintln!(
@@ -1160,6 +1231,8 @@ pub fn find_best_move(
     }
 
     eprintln!("AI done in {:.2}s", start.elapsed().as_secs_f64());
+    LAST_NODES.store(ss.nodes, Ordering::Relaxed);
+    LAST_QNODES.store(ss.qnodes, Ordering::Relaxed);
 
     match completed {
         Some((ranked, depth_completed)) => {
@@ -1169,15 +1242,17 @@ pub fn find_best_move(
                 );
                 return ranked;
             }
-            book_store(
-                &mut book.lock().unwrap(),
-                dirty,
-                &pos_hash_str,
-                crate::fen::to_fen(gs),
-                Some(gs.ply as i32),
-                &ranked,
-                depth_completed,
-            );
+            if run_knobs.use_book {
+                book_store(
+                    &mut book.lock().unwrap(),
+                    dirty,
+                    &pos_hash_str,
+                    crate::fen::to_fen(gs),
+                    Some(gs.ply as i32),
+                    &ranked,
+                    depth_completed,
+                );
+            }
             if ranked.len() < want_ranks {
                 eprintln!(
                     "  [BOOK] stored {} rank(s), {} requested (search ended early or ran out of moves)",
