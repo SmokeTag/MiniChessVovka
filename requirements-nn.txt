@@ -1,0 +1,18 @@
+# Minihouse Zero only -- the neural engine (nn/, docs/ZERO.md).
+#
+# NOT needed by the Pygame GUI, the chess.com bot, the opening book, or the test
+# suite. Those run on requirements.txt alone and must never import torch.
+#
+#     ./venv/bin/pip install -r requirements-nn.txt
+#
+# Installed into the SAME venv as everything else, deliberately. A separate
+# venv-nn would mean building the Rust extension into two places, and a stale
+# .so importing silently is this project's worst failure mode (see CLAUDE.md).
+# Isolation here is a matter of import discipline, not of interpreters.
+#
+# The +cu128 local version exists only on the PyTorch index, so the pin below is
+# unambiguous. cu128 is required: this machine's RTX 5070 Ti is Blackwell
+# (sm_120) and will not run kernels from an older CUDA build.
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+numpy>=2.0

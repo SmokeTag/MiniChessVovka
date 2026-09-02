@@ -16,6 +16,7 @@ Deeper notes live in `docs/`, and are worth loading before working in the area t
 | `docs/ENCODING.md` | the network's 24 input planes and 2,196-action policy map, and the fuzz that holds them |
 | `docs/GUI.md` | the Pygame front end's invariants and the user-visible search settings |
 | `docs/SEARCH.md` | draws in the search, MultiPV/parallelism, `bench/`, and the accuracy harness |
+| `docs/ZERO.md` | the neural engine: dependencies, teacher data, the network, and the arena |
 | `docs/evaluation_strategy.md` | what the evaluation measures and why |
 
 ## Build & run
@@ -150,6 +151,44 @@ From Python: `encode_position`, `move_to_action_index`, `action_index_to_move`,
 `ACTION_SPACE`. All four take the **Rust** `GameState`; from a Python one go through
 `ai._sync_to_rust`. They return plain lists, not numpy arrays, deliberately — `numpy` stays out
 of the GUI's and the bot's import path. Full layout in `docs/ENCODING.md`.
+
+### The neural engine (`nn/`)
+
+Minihouse Zero — an AlphaZero-style policy-value net and MCTS on top of this core.
+Phases 0 (draw rules) and 1 (encoding) are done; phase 2 is the network and its
+alpha-beta teacher data. Full account in `docs/ZERO.md`.
+
+**Only `nn/` may import torch or numpy.** The GUI, the bot, the book and the test suite
+run on `requirements.txt` alone, and `tests/test_nn.py` skips itself when torch is
+absent, so a plain `pytest tests/ -q` stays green without it. The NN deps live in the
+**same venv** (`requirements-nn.txt`, `torch==2.11.0+cu128` — cu128 is required for this
+machine's Blackwell GPU): a separate venv-nn would mean `maturin develop` into two
+interpreters, and a stale `.so` is this project's worst failure mode.
+
+**Nothing generated goes in the repo root.** `nn/paths.py` is the only answer —
+`$MINIZERO_DATA`, else `~/.local/share/minihouse-zero`. Same rule, same reason as
+`tests/cache_isolation.py`.
+
+```bash
+./venv/bin/python -m nn.teacher generate --positions 50000 --jobs 20 --depth 8
+./venv/bin/python -m nn.train --epochs 40
+./venv/bin/python -m nn.arena --opponent alphabeta --depth 2 --games 200
+```
+
+Three things that are not guessable from the code:
+
+- **Teacher records store the position, not its encoding** (FEN + `ply` + `reps`), so a
+  plane-layout change costs a re-encode rather than hours of regeneration. The generator
+  asserts per position that `teacher.restore()` reproduces the live encoding — without
+  it the progress and repetition planes differ between training and play, silently.
+- **Walks run on the Rust `GameState`, never `gamestate.py`.** The Python one costs
+  milliseconds a ply against ~126k plies/s, which made the walk — not the depth-8
+  label — the bottleneck, and the generator 15x slower.
+- **Every teacher search runs `use_book=False`**, which gates the probe and the store, so
+  bulk generation never reads or writes `book.db`.
+
+Checkpoints carry the encoding they were trained against and refuse to load against a
+different one: otherwise a plane-layout change loads cleanly and plays nonsense.
 
 ### The opening book, in one paragraph
 
