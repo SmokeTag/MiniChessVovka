@@ -2,6 +2,15 @@ use crate::types::*;
 use crate::zobrist;
 
 pub const DEFAULT_PLY_LIMIT: u32 = 200;
+pub const MAX_REPETITION_SCAN: usize = 24;
+pub const NULL_MOVE_SENTINEL: u64 = 0xDEAD_BEEF_DEAD_BEEF;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DrawKind {
+    None,
+    InTree,
+    FromHistory,
+}
 
 #[derive(Clone)]
 pub struct UndoInfo {
@@ -15,6 +24,7 @@ pub struct UndoInfo {
     pub moved_promoted: bool,
     pub new_promotion: bool,
     pub prev_hash: u64,
+    pub prev_reversible: u32,
 }
 
 #[derive(Clone)]
@@ -31,6 +41,8 @@ pub struct GameState {
     pub hash: u64,
 
     pub position_history: Vec<u64>,
+    pub history_root: usize,
+    pub reversible_plies: u32,
     pub ply: u32,
     pub ply_limit: u32,
     pub is_draw: bool,
@@ -68,7 +80,9 @@ impl GameState {
             game_over_message: String::new(),
             promoted_pieces: 0,
             hash: 0,
-            position_history: Vec::new(),
+            position_history: Vec::with_capacity(64),
+            history_root: 0,
+            reversible_plies: 0,
             ply: 0,
             ply_limit: DEFAULT_PLY_LIMIT,
             is_draw: false,
@@ -115,6 +129,8 @@ impl GameState {
         self.ply_limit = DEFAULT_PLY_LIMIT;
         self.position_history.clear();
         self.position_history.push(self.hash);
+        self.history_root = 1;
+        self.reversible_plies = 0;
     }
 
     pub fn repetition_count(&self) -> usize {
@@ -123,8 +139,67 @@ impl GameState {
     }
 
     #[inline]
-    fn record_position(&mut self) {
+    pub fn search_draw(&self) -> DrawKind {
+        if self.ply >= self.ply_limit {
+            return DrawKind::FromHistory;
+        }
+        let hist = &self.position_history;
+        let n = hist.len();
+        if n <= self.history_root || n < 3 {
+            return DrawKind::None;
+        }
+        let h = self.hash;
+        let window = (self.reversible_plies as usize).min(MAX_REPETITION_SCAN);
+        let mut count = 0usize;
+        let mut i = n - 1;
+        let mut back = 0usize;
+        while back + 2 <= window && i >= 2 {
+            i -= 2;
+            back += 2;
+            if hist[i] == h {
+                if i + 1 >= self.history_root {
+                    return DrawKind::InTree;
+                }
+                count += 1;
+                if count >= 2 {
+                    return DrawKind::FromHistory;
+                }
+            }
+        }
+        DrawKind::None
+    }
+
+    pub fn is_terminal_draw(&self) -> bool {
+        self.ply >= self.ply_limit || self.repetition_count() >= 3
+    }
+
+    pub fn set_search_root(&mut self) {
+        if self.position_history.last() != Some(&self.hash) {
+            self.position_history.clear();
+            self.position_history.push(self.hash);
+            self.reversible_plies = 0;
+        }
+        self.history_root = self.position_history.len();
+    }
+
+    #[inline]
+    pub fn push_null_position(&mut self) -> u32 {
+        let saved = self.reversible_plies;
+        self.position_history.push(NULL_MOVE_SENTINEL);
+        self.reversible_plies = 0;
+        saved
+    }
+
+    #[inline]
+    pub fn pop_null_position(&mut self, saved: u32) {
+        self.position_history.pop();
+        self.reversible_plies = saved;
+    }
+
+    #[inline]
+    fn record_position(&mut self, irreversible: bool) {
         self.ply += 1;
+        self.reversible_plies = if irreversible { 0 } else { self.reversible_plies + 1 };
         self.position_history.push(self.hash);
     }
 
@@ -505,7 +580,9 @@ impl GameState {
             moved_promoted: false,
             new_promotion: false,
             prev_hash: prev_hash,
+            prev_reversible: self.reversible_plies,
         };
+        let mut irreversible = false;
 
         if m.is_drop() {
             let to = m.to_sq();
@@ -518,12 +595,19 @@ impl GameState {
             self.hands[color.index()][pt.index()] -= 1;
             self.last_move = m;
             self.current_turn = self.current_turn.opposite();
+            irreversible = true;
         } else {
             let from = m.from_sq();
             let to = m.to_sq();
             let piece = self.board[from];
             let target = self.board[to];
             let color = piece.color().unwrap();
+            if target != Piece::Empty
+                || piece.piece_type() == Some(PieceType::Pawn)
+                || m.promotion().is_some()
+            {
+                irreversible = true;
+            }
 
             if target != Piece::Empty {
                 undo.captured = target;
@@ -590,6 +674,10 @@ impl GameState {
         }
         self.hash = h;
         debug_assert_eq!(self.hash, self.compute_hash(), "incremental hash diverged");
+
+        self.ply += 1;
+        self.reversible_plies = if irreversible { 0 } else { self.reversible_plies + 1 };
+        self.position_history.push(self.hash);
     }
 
     pub fn undo_ai_move(&mut self) {
@@ -656,6 +744,12 @@ impl GameState {
         self.legal_moves_cache = None;
         self.in_check_cache = None;
         self.hash = undo.prev_hash;
+
+        self.position_history.pop();
+        self.reversible_plies = undo.prev_reversible;
+        if self.ply > 0 {
+            self.ply -= 1;
+        }
     }
 
     pub fn make_move(&mut self, m: Move, check_game_over: bool) -> bool {
@@ -678,6 +772,7 @@ impl GameState {
             moved_promoted: false,
             new_promotion: false,
             prev_hash,
+            prev_reversible: self.reversible_plies,
         };
 
         if m.is_drop() {
@@ -707,7 +802,7 @@ impl GameState {
             self.hash = self.compute_hash();
 
             self.ai_history.push(undo);
-            self.record_position();
+            self.record_position(true);
 
             if check_game_over {
                 self.check_game_over();
@@ -787,7 +882,7 @@ impl GameState {
         self.hash = self.compute_hash();
 
         self.ai_history.push(undo);
-        self.record_position();
+        self.record_position(is_capture || is_pawn);
 
         if check_game_over {
             self.check_game_over();
@@ -803,12 +898,6 @@ impl GameState {
             return false;
         }
         self.undo_ai_move();
-        if self.position_history.len() > 1 {
-            self.position_history.pop();
-        }
-        if self.ply > 0 {
-            self.ply -= 1;
-        }
         self.pending_undo = None;
         self.is_draw = false;
         self.game_over_message.clear();
@@ -841,7 +930,7 @@ impl GameState {
             undo.new_promotion = true;
             self.ai_history.push(undo);
         }
-        self.record_position();
+        self.record_position(true);
 
         self.check_game_over();
         true
@@ -860,6 +949,8 @@ impl GameState {
             promoted_pieces: self.promoted_pieces,
             hash: self.hash,
             position_history: self.position_history.clone(),
+            history_root: self.history_root,
+            reversible_plies: self.reversible_plies,
             ply: self.ply,
             ply_limit: self.ply_limit,
             is_draw: self.is_draw,

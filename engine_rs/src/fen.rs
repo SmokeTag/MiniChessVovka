@@ -188,6 +188,8 @@ pub fn from_fen(fen: &str) -> Result<GameState, String> {
     gs.hash = gs.compute_hash();
     gs.position_history.clear();
     gs.position_history.push(gs.hash);
+    gs.history_root = 1;
+    gs.reversible_plies = 0;
     Ok(gs)
 }
 

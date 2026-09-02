@@ -381,6 +381,49 @@ must hash back to `gs.hash`, which `tests/test_fen.py` asserts over random games
 `2bnrk/5p/6/6/P5/KRNB2[] w`, hands in brackets (uppercase White), `~` marking a promoted piece, ranks
 top row first. Exposed as `ai.to_fen` / `ai.from_fen`.
 
+### Draws in the search
+
+The search scores a repetition as a draw, and the repetition it looks for spans **both** the real
+game and its own tree. `GameState.position_history` is one `Vec<u64>` of Zobrist hashes carrying
+both: `make_ai_move` pushes and `undo_ai_move` pops, so the search extends the same list the game
+built. `history_root` is where the game stops and the tree starts, pinned by `set_search_root()` at
+the top of `find_best_move`.
+
+- **A match at or below the root is a draw immediately; a match above it needs a true threefold.**
+  Inside the tree either side can usually repeat again, which is why one recurrence is enough there —
+  the usual convention, and the same one `build_book.py` searches under. Against game history the
+  rule is the game's own: three occurrences.
+- **The scan is backwards, steps by two, and stops at the last irreversible move.** Only the same
+  side to move can match, and no position survives a capture, a drop, a pawn move or a promotion —
+  all four change the board-plus-hands identity for good. `reversible_plies` is that counter, kept by
+  `make_ai_move` / `record_position` and restored from `UndoInfo` on the way back, capped at
+  `MAX_REPETITION_SCAN`. In Crazyhouse it collapses to zero within a ply or two of almost any node,
+  which is why the check does not show up in `bench/`.
+- **A null move pushes `NULL_MOVE_SENTINEL`, not the flipped hash.** The null position is not one the
+  game can reach, and the two plies after it can walk the board back onto it. A sentinel keeps the
+  scan's parity and stops it seeing through the null.
+- **A draw score is never written to the TT and never keyed on the hash.** Both checks run before the
+  TT probe and before quiescence, and return without storing: whether a position is drawn depends on
+  the path to it, and the hash does not carry the path.
+- **A draw that rests on *game* history keeps the whole search out of the book** (`DrawKind::
+  FromHistory`, `SearchState::draw_used_history`). `probe_book` is keyed on the hash alone, so a row
+  saying "this position is 0" would be served to every future game reaching it by another route. An
+  in-tree draw is still stored — the builder has no game history, so every draw it finds is that
+  kind, and refusing to store them would re-search those nodes forever.
+
+**Carrying the history across the boundary.** `gamestate.py` keys its own history on
+`_position_key()` tuples, which hold exactly what the Zobrist hash reads, so `ai._history_hashes`
+rebuilds Rust hashes from them without replaying anything and memoises the result. It sends only the
+reversible tail (`_reversible_tail`, capped at `HISTORY_LIMIT`) — everything before the last
+irreversible move can never recur, and a shorter list is a shorter scan. `ai._sync_to_rust` assigns
+it **last**, after board/turn/hands/promoted, because every one of those setters recomputes the hash.
+A history whose last entry is not the live hash is discarded by `set_search_root()` rather than
+trusted.
+
+**For an MCTS leaf evaluator**: `GameState::is_terminal_draw()` is the game-rule verdict — threefold
+or `ply >= ply_limit`, no search heuristic, matching `check_game_over` exactly — and is exposed to
+Python as `is_terminal_draw()`. `search_draw()` is the alpha-beta one and is not the same question.
+
 ### MultiPV and parallelism
 
 `find_best_move(..., return_top_n=K)` with `K > 1` runs a full-window search of the top K root moves
