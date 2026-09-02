@@ -190,6 +190,28 @@ Three things that are not guessable from the code:
 Checkpoints carry the encoding they were trained against and refuse to load against a
 different one: otherwise a plane-layout change loads cleanly and plays nonsense.
 
+**MCTS lives in Rust, the batch loop in Python** (`engine_rs/src/mcts.rs`, `nn/mcts.py`).
+Rust descends until it has a batch of leaves needing evaluation, hands their planes across
+one call, and takes back priors and values; Rust threads calling *into* torch would
+serialise on the GIL. Three things are not guessable from the code:
+
+- **The batch exists because of virtual loss.** A descent that reaches an unevaluated
+  leaf marks its path as a loss so the next descent in the same `collect` goes elsewhere.
+  Without it every descent returns the same leaf and a batch is worth one simulation.
+- **The mask is implicit.** Rust reads priors only at the leaf's legal actions and
+  renormalises, so a plain softmax in Python *is* a masked softmax — the partition
+  function cancels. There is no masking step to forget.
+- **An empty `collect` is not the stop condition.** A descent ending on a terminal
+  position backs up without producing work, so the driver stops only when a `collect`
+  returns no leaves *and* the simulation count did not move. Terminal positions are
+  scored by the rules and never cost an evaluation; the root gets that verdict too, or a
+  search from a finished game expands a node with no edges.
+
+Values are in the frame of the side to move at each node, so `backup` flips sign every
+step up the path. `tests/test_mcts.py` drives all of it against a deliberately uniform
+evaluator — with a trained network you cannot tell a working search from a working
+policy.
+
 **The GUI can play the network** — the Engine button, via `nn/backend.py`. Selecting it
 is what imports torch: `thread_utils.AIThread` imports the backend inside `run()`, never
 at module scope, and `tests/test_nn.py` checks in a subprocess that importing the front

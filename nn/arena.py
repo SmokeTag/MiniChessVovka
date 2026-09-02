@@ -135,6 +135,34 @@ class ValueLookaheadPlayer:
         assert mover == gs.current_turn
         return legal[best]
 
+class MctsPlayer:
+    """The network with a tree on top: PUCT, `simulations` per move, argmax on visits.
+
+    This is what phase 3 exists to produce, and the difference from `PolicyPlayer` is
+    the whole point of the phase -- the same weights, asked the same question, with a
+    search between them and the board.
+    """
+
+    def __init__(self, net, device, simulations=800, batch=16, c_puct=None,
+                 name=None):
+        from nn import mcts as mcts_mod
+        self.mcts = mcts_mod
+        self.evaluator = mcts_mod.Evaluator(net, device)
+        self.simulations = simulations
+        self.batch = batch
+        self.c_puct = c_puct or mcts_mod.DEFAULT_C_PUCT
+        self.name = name or "mcts-%d" % simulations
+
+    def move(self, gs, legal):
+        tree = self.mcts.search(ai._sync_to_rust(gs), self.evaluator,
+                                simulations=self.simulations, batch=self.batch,
+                                c_puct=self.c_puct)
+        move = tree.best_move()
+        if move is None:
+            return None
+        move = ai._normalize_promotion(move, gs.current_turn)
+        return move if move in legal else None
+
 def random_opening(rng, plies):
     """A short legal walk whose end position is playable by both sides."""
     for _ in range(50):
@@ -164,6 +192,20 @@ def random_opening(rng, plies):
             return moves
     raise RuntimeError("could not build an opening of %d plies" % plies)
 
+def timed_move(player, gs, legal):
+    """Ask a player for a move and charge it the wall time.
+
+    The project's success bar is beating the alpha-beta engine **at equal time control**,
+    but a phase gate is stated in simulations against a depth. Those are different
+    claims, and a result at "800 sims vs depth 6" means very little without knowing which
+    side was being given more thinking time. So every match reports both.
+    """
+    started = time.perf_counter()
+    move = player.move(gs, legal)
+    player.seconds = getattr(player, "seconds", 0.0) + (time.perf_counter() - started)
+    player.moves = getattr(player, "moves", 0) + 1
+    return move
+
 def play_game(white, black, opening, ply_cap=200):
     """Returns (result_for_white, plies, reason). Illegal choices forfeit, loudly."""
     gs = GameState()
@@ -184,7 +226,7 @@ def play_game(white, black, opening, ply_cap=200):
             break
 
         player = white if gs.current_turn == "w" else black
-        move = player.move(gs, legal)
+        move = timed_move(player, gs, legal)
         if move is None:
             # A masked argmax cannot pick an illegal action, so this is a real bug in
             # the move/index map, not a weak player. Never silently substitute.
@@ -209,6 +251,8 @@ def run_match(subject, opponent, games, seed, opening_plies, ply_cap, quiet=True
     plies = []
     anomalies = []
     reasons = {}
+    for p in (subject, opponent):
+        p.seconds, p.moves = 0.0, 0
     started = time.time()
 
     for i, opening in enumerate(openings):
@@ -243,6 +287,10 @@ def run_match(subject, opponent, games, seed, opening_plies, ply_cap, quiet=True
         "stderr": stderr_of(tally),
         "mean_plies": sum(plies) / len(plies) if plies else 0.0,
         "draw_reasons": reasons,
+        "subject_ms_per_move": 1000.0 * subject.seconds / max(1, subject.moves),
+        "opponent_ms_per_move": 1000.0 * opponent.seconds / max(1, opponent.moves),
+        "subject_seconds": subject.seconds,
+        "opponent_seconds": opponent.seconds,
         "anomalies": anomalies,
         "seconds": time.time() - started,
     }
@@ -269,6 +317,9 @@ def build_subject(args):
     net, meta = load_checkpoint(path, device=device)
     print("subject: %s (epoch %s, val top1 %.4f)"
           % (path, meta.get("epoch"), meta.get("metrics", {}).get("top1", float("nan"))))
+    if args.sims:
+        return MctsPlayer(net, device, simulations=args.sims, batch=args.batch,
+                          c_puct=args.c_puct)
     if args.lookahead:
         return ValueLookaheadPlayer(net, device, name="value1ply@%s" % os.path.basename(path))
     return PolicyPlayer(net, device, name="policy@%s" % os.path.basename(path))
@@ -285,6 +336,12 @@ def main():
     ap.add_argument("--run", default="bootstrap")
     ap.add_argument("--device", default="auto")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--sims", type=int, default=0,
+                    help="MCTS simulations per move. 0 plays the raw policy argmax, "
+                         "which is the phase-2 criterion; 800 is the phase-3 one")
+    ap.add_argument("--batch", type=int, default=16,
+                    help="leaves collected per network call (virtual loss fills the batch)")
+    ap.add_argument("--c-puct", type=float, default=None)
     ap.add_argument("--lookahead", action="store_true",
                     help="one ply of value-head search instead of raw policy argmax. "
                          "Diagnostic only -- the phase-2 criterion is the raw policy")
@@ -309,6 +366,10 @@ def main():
                                        result["draws"], result["losses"]))
     print("  score  %.3f +/- %.3f" % (result["score"], result["stderr"]))
     print("  mean game %.0f plies, %.0fs" % (result["mean_plies"], result["seconds"]))
+    print("  time/move  %s %.0fms   vs   %s %.0fms   (%.1fx)"
+          % (result["subject"], result["subject_ms_per_move"],
+             result["opponent"], result["opponent_ms_per_move"],
+             result["subject_ms_per_move"] / max(1e-9, result["opponent_ms_per_move"])))
     for reason, count in sorted(result["draw_reasons"].items(), key=lambda kv: -kv[1]):
         print("  draw   %3d  %s" % (count, reason))
     if result["anomalies"]:

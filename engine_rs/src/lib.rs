@@ -6,6 +6,7 @@ mod fen;
 mod search;
 mod cache;
 mod encode;
+mod mcts;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyTuple, PyDict};
@@ -876,9 +877,82 @@ fn legal_action_indices(gs: &mut PyGameState) -> Vec<usize> {
     encode::legal_action_indices(&mut gs.inner)
 }
 
+#[pyclass(name = "Mcts", unsendable)]
+struct PyMcts {
+    inner: mcts::Mcts,
+}
+
+#[pymethods]
+impl PyMcts {
+    /// A search rooted at `gs`. The position is copied, so the caller may keep playing.
+    #[new]
+    #[pyo3(signature = (gs, c_puct=None, fpu=None))]
+    fn new(gs: &PyGameState, c_puct: Option<f32>, fpu: Option<f32>) -> Self {
+        let mut cfg = mcts::Config::default();
+        if let Some(c) = c_puct { cfg.c_puct = c; }
+        if let Some(f) = fpu { cfg.fpu = f; }
+        PyMcts { inner: mcts::Mcts::new(&gs.inner, cfg) }
+    }
+
+    /// Descend until `max_leaves` positions need the network, resolving terminals in
+    /// place. Returns their planes flat, `max_leaves * ENCODE_INPUT_SIZE` at most;
+    /// empty means the tree could not produce new work and the search is finished.
+    fn collect(&mut self, py: Python<'_>, max_leaves: usize) -> Vec<f32> {
+        py.allow_threads(|| self.inner.collect(max_leaves))
+    }
+
+    /// Answer the last `collect`. `priors` is one masked, normalised row of ACTION_SPACE
+    /// per leaf; `values` one scalar per leaf, in that leaf's own frame.
+    fn expand(&mut self, py: Python<'_>, priors: Vec<f32>, values: Vec<f32>) -> PyResult<()> {
+        py.allow_threads(|| self.inner.expand(&priors, &values))
+            .map_err(PyValueError::new_err)
+    }
+
+    #[getter]
+    fn simulations(&self) -> usize { self.inner.simulations() }
+
+    #[getter]
+    fn pending(&self) -> usize { self.inner.pending_count() }
+
+    #[getter]
+    fn nodes(&self) -> usize { self.inner.node_count() }
+
+    /// The root's value in the frame of the side to move there.
+    #[getter]
+    fn value(&self) -> f32 { self.inner.root_value() }
+
+    fn best_move(&self, py: Python<'_>) -> PyObject {
+        match self.inner.best_move() {
+            Some(m) => rust_move_to_py(py, m),
+            None => py.None(),
+        }
+    }
+
+    /// [(move, visits)] for every root move -- the visit distribution a policy target is
+    /// built from, and what the caller samples for temperature play.
+    fn root_visits<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let items: Vec<PyObject> = self
+            .inner
+            .root_moves()
+            .into_iter()
+            .map(|(m, v)| {
+                let mv = rust_move_to_py(py, m);
+                PyTuple::new(py, &[mv, v.into_pyobject(py).unwrap().into_any().unbind()])
+                    .unwrap()
+                    .into()
+            })
+            .collect();
+        PyList::new(py, items)
+    }
+
+    /// [(action_index, visits, mean_value)] at the root, most-visited first.
+    fn root_stats(&self) -> Vec<(u32, u32, f32)> { self.inner.root_stats() }
+}
+
 #[pymodule]
 fn minichess_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGameState>()?;
+    m.add_class::<PyMcts>()?;
     m.add_function(wrap_pyfunction!(find_best_move, m)?)?;
     m.add_function(wrap_pyfunction!(find_best_move_with_score, m)?)?;
     m.add_function(wrap_pyfunction!(set_parallel_search, m)?)?;
