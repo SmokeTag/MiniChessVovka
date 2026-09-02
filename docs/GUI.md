@@ -82,7 +82,7 @@ no search.
 
 ## Choosing the engine
 
-The **Engine** button (bottom of the controls column) switches the AI's moves between the
+The **Engine** button (below the steppers, above Save position to book) switches the AI's moves between the
 alpha-beta search and the phase-2 policy network (`nn/backend.py`, `docs/ZERO.md`). It
 defaults to the search, and the setting persists in `gui_settings.json`.
 
@@ -107,6 +107,14 @@ defaults to the search, and the setting persists in `gui_settings.json`.
   else in the app speaks.
 - **Hints always use the search.** The network has no depth to vary and no ranked lines
   to show, so the hint path is untouched.
+- **It needed a grid row of its own.** The controls grid is eight rows; rows 3-5 are the
+  steppers, so a new button has to take a row nothing else claims. Adding one at a row
+  that was already occupied made the two controls fail in opposite directions — drawing
+  is sequential so the later one painted over the earlier, while hit-testing returns on
+  the first match in insertion order, so the *invisible* control took the clicks.
+  `tests/test_gui_controls.py` now asserts no two hit regions overlap, which is the
+  machine-checkable form of the "a control can never be clickable where it is not
+  visible" invariant above.
 
 **It is much weaker than the search** — a raw policy argmax, one forward pass, no tree.
 `docs/ZERO.md` measures it at 0.970 against random but ~0.1 against depth-2 alpha-beta.
