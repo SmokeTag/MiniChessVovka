@@ -79,7 +79,7 @@ class Layout:
         header_h = self.s(26) + self.s(34) + eval_h + self.s(30) + 4 * self.s(6)
         self.header = pygame.Rect(inner_x, pad, inner_w, header_h)
 
-        controls_h = 7 * btn_h + 6 * btn_gap
+        controls_h = 8 * btn_h + 7 * btn_gap
         self.controls = pygame.Rect(inner_x, self.header.bottom + self.s(10), inner_w, controls_h)
 
         self.analysis_rows = max(0, int(analysis_rows))

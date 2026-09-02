@@ -536,13 +536,6 @@ def _draw_controls(screen, layout, ui, hits):
                   note=ui.hint_lines_label,
                   at_min=not ui.can_lines_down, at_max=not ui.can_lines_up,
                   muted=not ui.show_hint)
-    net = ui.engine == 'network'
-    button('toggle_engine', layout.button_grid(6, 0, span=2),
-           f"Engine: {ui.engine_label}",
-           HIGHLIGHT_COLORS['trainer'] if net else HIGHLIGHT_COLORS['neutral'],
-           badge="NET" if net else "A-B",
-           badge_color=(18, 78, 78) if net else (54, 52, 58))
-
     busy = ui.hint_active
     _draw_stepper(screen, layout, hits, mouse, row=5, name='workers',
                   title=f"{ui.hint_workers} hint core" + ("" if ui.hint_workers == 1 else "s"),
@@ -550,7 +543,14 @@ def _draw_controls(screen, layout, ui, hits):
                   at_min=not ui.can_workers_down, at_max=not ui.can_workers_up,
                   muted=not ui.show_hint)
 
-    button('save_book', layout.button_grid(6, 0, span=2), "Save position to book",
+    net = ui.engine == 'network'
+    button('toggle_engine', layout.button_grid(6, 0, span=2),
+           f"Engine: {ui.engine_label}",
+           HIGHLIGHT_COLORS['trainer'] if net else HIGHLIGHT_COLORS['neutral'],
+           badge="NET" if net else "A-B",
+           badge_color=(18, 78, 78) if net else (54, 52, 58))
+
+    button('save_book', layout.button_grid(7, 0, span=2), "Save position to book",
            HIGHLIGHT_COLORS['trainer'], enabled=ui.can_save_book,
            badge="IN BOOK" if ui.in_book else "SAVE",
            badge_color=(24, 84, 48) if ui.in_book else (18, 74, 74))
