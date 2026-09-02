@@ -1,3 +1,6 @@
 # GitHub Linguist overrides — make repo detected as Rust
 *.py linguist-vendored
 *.sh linguist-vendored
+
+# Network weights are binary; do not try to diff or merge them.
+*.pt binary
