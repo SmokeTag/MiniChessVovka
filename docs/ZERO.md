@@ -276,6 +276,97 @@ of value lookahead scored *worse* than the raw policy (0.060 vs 0.125), because 
 the policy away entirely. PUCT uses the policy as a prior and the value only at leaves,
 which is why it needs both heads and neither alone.
 
+## Phase 3: MCTS in Rust
+
+`engine_rs/src/mcts.rs` owns the tree; `nn/mcts.py` owns the GPU and nothing else. Rust
+descends until it has a batch of leaves that need evaluating, hands their planes across
+one call, and takes back priors and values. That inversion is the phase-4 design decision
+made early: Rust threads calling *into* torch would serialise on the GIL and give up
+exactly the parallelism they were spawned for.
+
+Nodes and edges are flat `Vec`s addressed by index -- no `Rc`, no `RefCell` -- and a
+descent walks a single scratch board with `make_ai_move`/`undo_ai_move` rather than
+cloning a `GameState` per node. A simulation therefore costs two cheap move applications
+per ply.
+
+**The batch exists because of virtual loss.** A descent that reaches an unevaluated leaf
+marks its path as if it had lost, so the next descent in the same `collect` goes
+elsewhere. Without it every descent in a batch returns the same leaf and the batch is
+worth one simulation. It is worth 8x: 800 simulations take 1.08s one leaf at a time and
+0.13s at sixteen, which is ~6,000 simulations a second.
+
+**Masking is implicit and cannot be forgotten.** Rust reads priors only at the legal
+actions of the leaf it is expanding and renormalises them, so a plain softmax over all
+2,196 logits in Python *is* a masked softmax -- `p_i / sum_{j in legal} p_j` cancels the
+partition function. There is no masking step to get wrong.
+
+**Values are in the frame of the side to move at each node**, matching the network's own
+convention, so `backup` flips sign at every step up the path.
+
+### Two bugs worth keeping in mind
+
+Both were found by `tests/test_mcts.py` before any strength was measured, and both are
+the kind that produce a plausible-looking search rather than a crash.
+
+- **The root needs a terminal verdict like any other node.** Only child nodes got one
+  during a descent, so a search started from a finished game expanded a node with no
+  edges and then selected out of an empty range.
+- **An empty `collect` is not the stop condition.** A descent ending on a terminal
+  position backs up *without* adding to the batch, so `pending.len() < max_leaves` never
+  advances when every reachable leaf is terminal -- an infinite loop. `collect` is now
+  bounded per call, and the driver stops only when a collect yields no leaves **and** the
+  simulation count did not move.
+
+### Testing a search rather than a network
+
+Every test in `tests/test_mcts.py` uses a **uniform** evaluator: flat priors, zero
+values. With a trained network it is impossible to tell a working search from a working
+policy -- the network finds the mate on its own and every result is evidence about the
+weights. Given an evaluator that knows nothing, any preference the search shows is the
+search's own, and "finds mate in one" becomes a real test of selection, backup and
+terminal scoring together.
+
+That framing also caught a wrong expectation of mine. Given a uniform evaluator, an
+*opening* position carries no information at all, so PUCT spreading visits evenly across
+the legal moves is correct behaviour -- a sharpening distribution there would mean
+something was leaking a preference it had not earned. The test now asserts both halves:
+flat where there is nothing to find, concentrated near a mate that is.
+
+### What the search is worth
+
+Same weights, same question, with and without a tree:
+
+| | vs depth-2 | vs depth-6 |
+| --- | --- | --- |
+| raw policy argmax | 0.185 | — |
+| MCTS, 800 simulations | **0.833** | **0.420** (+83 =2 -115, 200 games) |
+
+The phase-3 gate is 800 simulations beating depth-6, and 0.420 does not.
+
+**But the gate and the project's success bar are different claims.** The bar is beating
+alpha-beta *at equal time control*, and that run was not it: depth-6 spent roughly three
+and a half times the wall clock per move that MCTS-800 did. Measuring the gate is
+therefore measuring a handicap match. The arena now reports ms/move for both sides, so a
+result can never again be read without knowing who was given more thinking time.
+
+Given the same budget the picture changes:
+
+| | score vs depth-6 | ms/move, subject vs opponent |
+| --- | --- | --- |
+| MCTS, 800 sims | 0.420 +/- 0.035 (200 games) | ~100 vs ~360 |
+| MCTS, 2400 sims | **0.525 +/- 0.050** (100 games) | 343 vs 404 (0.85x) |
+
+At 2,400 simulations the network is **level with depth-6 alpha-beta while using slightly
+less time per move than it**. Level, not ahead: +-0.050 puts 0.5 comfortably inside the
+interval, and the honest reading of +52 =1 -47 is a dead heat. It is still the first point
+in this project at which the network is competitive with the search on the search's own
+terms, and it was reached with a network that is itself a bootstrap -- trained on the very
+engine it is now matching, and due to be thrown away before the zero run.
+
+The gate should be restated in time rather than simulations. "800 sims" was a guess at a
+budget made before anything could be measured; the thing worth gating on is what the
+scoping doc actually asked for.
+
 ## Playing it: the phase-5 seam, early
 
 `nn/backend.py` gives the network the same contract as `ai.find_best_move_with_score` --

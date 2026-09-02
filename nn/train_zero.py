@@ -68,14 +68,34 @@ def _batches(n, batch, rng, shuffle=True):
 
 
 def _make_targets(sel, pol_idx, pol_p, legal, action_space, device):
-    """Dense soft policy target and legal mask for one batch, built on demand."""
+    """Dense soft policy target and legal mask for one batch, scattered on the device.
+
+    The dense form is 2.8MB a batch (256 x 2,196, float target plus bool mask) against
+    ~90kB of ragged data, so it is built *on the GPU* from the small arrays rather than
+    built on the host and copied over. Measured: 12.0ms a batch host-side, 1-2ms this
+    way, against a 5ms training step -- host-side scatter was two thirds of training.
+
+    The targets stay ragged in memory for the same reason: a stored dense target would
+    be 8.8kB a position against a mean support of ~22 actions.
+    """
     b = len(sel)
-    target = torch.zeros((b, action_space), dtype=torch.float32)
-    mask = torch.zeros((b, action_space), dtype=torch.bool)
-    for r, i in enumerate(sel):
-        target[r, torch.from_numpy(pol_idx[i].astype(np.int64))] = torch.from_numpy(pol_p[i])
-        mask[r, torch.from_numpy(legal[i].astype(np.int64))] = True
-    return target.to(device), mask.to(device)
+    target = torch.zeros((b, action_space), dtype=torch.float32, device=device)
+    mask = torch.zeros((b, action_space), dtype=torch.bool, device=device)
+
+    plens = np.fromiter((len(pol_idx[i]) for i in sel), dtype=np.int64, count=b)
+    if plens.sum():
+        rows = torch.from_numpy(np.repeat(np.arange(b, dtype=np.int64), plens)).to(device)
+        cols = torch.from_numpy(np.concatenate([pol_idx[i] for i in sel]).astype(np.int64)).to(device)
+        vals = torch.from_numpy(np.concatenate([pol_p[i] for i in sel]).astype(np.float32)).to(device)
+        target[rows, cols] = vals
+
+    llens = np.fromiter((len(legal[i]) for i in sel), dtype=np.int64, count=b)
+    if llens.sum():
+        lrows = torch.from_numpy(np.repeat(np.arange(b, dtype=np.int64), llens)).to(device)
+        lcols = torch.from_numpy(np.concatenate([legal[i] for i in sel]).astype(np.int64)).to(device)
+        mask[lrows, lcols] = True
+
+    return target, mask
 
 
 def run(records, out_path, epochs, batch, lr, weight_decay, value_weight,
@@ -95,15 +115,29 @@ def run(records, out_path, epochs, batch, lr, weight_decay, value_weight,
     net.train()
 
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=weight_decay)
+    # A gather out of host memory costs 3.5ms a batch against a 5ms step, so the
+    # inputs live on the device when they fit. 400k positions is 1.38GB of the 12GB
+    # card and training never overlaps self-play, but the guard keeps a larger replay
+    # window from turning into an OOM at 3am rather than a slower epoch.
     xt = torch.from_numpy(x)
     vt = torch.from_numpy(value)
+    resident = False
+    if device.startswith("cuda") and torch.cuda.is_available():
+        need = x.nbytes + value.nbytes
+        free, _total = torch.cuda.mem_get_info()
+        if need < 0.5 * free:
+            xt = xt.to(device)
+            vt = vt.to(device)
+            resident = True
+    log("  inputs %s (%.2f GB)" % ("on device" if resident else "on host", x.nbytes / 1e9))
 
     history = []
     for epoch in range(1, epochs + 1):
         tot = {"p": 0.0, "v": 0.0, "ent": 0.0, "mae": 0.0, "n": 0}
         for sel in _batches(n, batch, rng):
-            xb = xt[sel].to(device, non_blocking=True)
-            vb = vt[sel].to(device, non_blocking=True)
+            idx = torch.from_numpy(sel).to(xt.device)
+            xb = xt[idx] if resident else xt[idx].to(device, non_blocking=True)
+            vb = vt[idx] if resident else vt[idx].to(device, non_blocking=True)
             target, mask = _make_targets(sel, pol_idx, pol_p, legal, rs.ACTION_SPACE, device)
 
             logits, pred = net(xb)
