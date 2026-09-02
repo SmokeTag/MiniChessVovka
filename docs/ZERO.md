@@ -136,6 +136,17 @@ a bootstrap run is most likely to get quietly wrong. The train/val split is by F
 so it is reproducible across regenerations and keeps a position in the same half when the
 set grows.
 
+**Size the schedule to the overfit knee; do not early-stop past it.** At 139k positions
+val top-1 peaks around epoch 13-14 and declines after -- by epoch 60 the val policy loss
+has climbed from 1.57 to 3.68 while the train loss is still falling. Running a 60-epoch
+cosine and keeping the best checkpoint gives 0.497 top-1 at a value MAE of 0.199, because
+the peak lands while the learning rate is still near its maximum and the value head has
+not settled. A **20**-epoch cosine anneals into the same knee and beats it on both heads
+at once: **0.508 top-1, 0.170 value MAE**. It also removes a real hazard in checkpoint
+selection -- under the longer schedule the best-policy epoch was *not* the best-value
+epoch, so `best.pt` handed the GUI a good policy with a weak eval readout. The knee moves
+with the data; re-measure if the teacher set grows.
+
 ## Free data: file mirroring
 
 Reflecting the board across the file axis, `(r, f) -> (r, 5 - f)`, is an **exact
@@ -205,10 +216,13 @@ bug in the move/index map, not a weak player.
 
 ### What the bar actually costs
 
-**Against random the criterion is met: 0.970 (+188 =12 -0)** at 47% val top-1. All 12
-draws are conversion failures -- 10 stalemates, 2 repetitions -- a searchless policy
-winning material and then failing to finish. Depth-2, by contrast, beats random 100-0
-with no draws at all.
+Measured on the shipped bootstrap checkpoint: 139,301 unique teacher positions, val
+top-1 **0.508**, top-5 0.876, value MAE 0.170, value sign agreement 0.940.
+
+**Against random the criterion is met: 0.985 (+194 =6 -0) over 200 games.** It never
+loses. All six draws are conversion failures -- stalemates, a searchless policy winning
+material and then failing to finish. Depth-2, by contrast, beats random 100-0 with no
+draws at all.
 
 **Against depth-2 it is not, and the reason is not a bug.** Feed a synthetic player the
 depth-8 move with probability p and a uniform random legal move otherwise:
@@ -220,10 +234,16 @@ depth-8 move with probability p and a uniform random legal move otherwise:
 | 70% | 0.237 |
 | 100% | 0.912 |
 
-The network scores 0.077-0.125, which is *at or slightly above* the synthetic curve for
-its own agreement rate (47% on held-out teacher positions, 31% on the positions it
-reaches in its own games) -- so its mistakes are already better than random substitutions
-and it is performing exactly as its accuracy predicts.
+**The network scores 0.185** (+34 =6 -160) at 51% top-1, which is well *above* the
+synthetic curve there: interpolating the table gives ~0.07 for a player that picks the
+depth-8 move half the time and a uniform random one otherwise. So its mistakes are much
+better than random substitutions -- when it is not playing the best move it is usually
+playing a reasonable one -- and it performs better than its raw agreement rate predicts,
+not worse.
+
+For scale, tripling the teacher set from 48k to 139k moved top-1 from 0.473 to 0.508 and
+the depth-2 score from 0.077 to 0.185. That gain is real, and it is also the shape of the
+problem: the remaining distance to 0.5 is not another tripling away.
 
 What the table says is that **top-1 agreement converts to playing strength brutally
 non-linearly in this variant**: roughly 90%+ agreement with depth-8 is needed to match a
@@ -232,6 +252,10 @@ opponent captures it and drops it straight back, so one blunder in a 28-ply game
 usually the game. Reaching that from a searchless 0.5M-parameter policy is not a data
 problem, and more teacher data will not get there: the phase-2 exit criterion as written
 was optimistic about what a raw policy can do here.
+
+**Where phase 2 ended up: the random half of the criterion is met with room to spare
+(0.985), the depth-2 half is not (0.185), and the gap is understood rather than
+mysterious.**
 
 That is an argument for phase 3, not against the network. Search is what converts a
 policy that is right half the time into a player that does not hang pieces, and MCTS is

@@ -186,7 +186,13 @@ def main():
     ap.add_argument("--data", default="depth8", help="teacher set name")
     ap.add_argument("--run", default="bootstrap", help="checkpoint subdirectory")
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--epochs", type=int, default=40)
+    # 20, not 40: at 139k positions val top-1 peaks around epoch 13-14 and the network
+    # overfits after it (val policy loss climbs from 1.57 to 3.68 by epoch 60 while train
+    # loss keeps falling). Sizing the cosine schedule to the knee anneals the learning
+    # rate *into* the peak instead of past it, and beats early-stopping a longer run on
+    # both heads at once: 0.508 top-1 / 0.170 value MAE against 0.497 / 0.199. Re-measure
+    # this if the teacher set grows -- the knee moves with the data.
+    ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--batch", type=int, default=1024)
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--weight-decay", type=float, default=1e-4)
