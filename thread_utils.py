@@ -21,12 +21,18 @@ from ai import find_best_move, find_best_move_with_score
 from utils import format_move_for_print
 
 class AIThread(threading.Thread):
-    """The engine's own move. Single-PV, so the score costs nothing extra."""
+    """The engine's own move. Single-PV, so the score costs nothing extra.
 
-    def __init__(self, gamestate, depth):
+    `engine` selects the backend: "alphabeta" is the search, "network" is the policy net
+    (nn/backend.py). Hints always use the search -- the network has no depth to vary and
+    no ranked lines to show.
+    """
+
+    def __init__(self, gamestate, depth, engine="alphabeta"):
         threading.Thread.__init__(self)
         self.gamestate = copy.deepcopy(gamestate)
         self.depth = depth
+        self.engine = engine
         self.best_move = None
         self.score = None
         self.done = False
@@ -36,7 +42,14 @@ class AIThread(threading.Thread):
     def run(self):
         try:
             print(f"Starting AI move calculation in thread: {self.name}")
-            self.best_move, self.score = find_best_move_with_score(self.gamestate, self.depth)
+            if self.engine == "network":
+                # Imported here, not at module scope, so that torch is loaded only for a
+                # user who actually selects the network -- and loaded off the UI thread,
+                # which is where the several seconds of first import belong.
+                from nn import backend
+                self.best_move, self.score = backend.find_best_move_with_score(self.gamestate)
+            else:
+                self.best_move, self.score = find_best_move_with_score(self.gamestate, self.depth)
             move_str = format_move_for_print(self.best_move)
             print(f"AI thread {self.name} finished. Best move: {move_str} ({self.score})")
         except Exception as e:

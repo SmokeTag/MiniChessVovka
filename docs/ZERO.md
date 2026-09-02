@@ -240,6 +240,17 @@ of value lookahead scored *worse* than the raw policy (0.060 vs 0.125), because 
 the policy away entirely. PUCT uses the policy as a prior and the value only at leaves,
 which is why it needs both heads and neither alone.
 
+## Playing it: the phase-5 seam, early
+
+`nn/backend.py` gives the network the same contract as `ai.find_best_move_with_score` --
+`(move, white_relative_score)` -- and the GUI's **Engine** button selects it. That is
+phase 5 in its smallest form, landed early because being able to sit down and play the
+thing is worth more than its ordering in the plan. What it is not yet: the chess.com bot
+still always uses the search, and there is no MCTS behind it.
+
+See `docs/GUI.md` for the control and the invariants it has to respect -- chiefly that
+importing the GUI must not import torch, which is checked in a subprocess.
+
 ## Risks still live
 
 | risk | mitigation |

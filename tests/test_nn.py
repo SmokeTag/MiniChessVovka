@@ -258,3 +258,66 @@ def test_augmented_batches_stay_legal():
             assert bmask[i, bp[i]], "a policy target fell outside its own legal mask"
         seen_any = True
     assert seen_any
+
+def test_the_front_ends_do_not_import_torch():
+    """The whole reason the NN deps live in the same venv (docs/ZERO.md).
+
+    Isolation here is import discipline, not a second interpreter, so it has to be
+    checked rather than assumed. Run in a subprocess: torch is already imported in this
+    one by the tests above, so an in-process check would prove nothing.
+    """
+    import subprocess
+    probe = (
+        "import sys; sys.path.insert(0, %r);"
+        "import ai, settings, thread_utils;"
+        "from nn import backend;"
+        "print('torch' in sys.modules)" % os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))
+    )
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().endswith("False"), (
+        "importing the GUI's modules pulled torch in:\n%s" % out.stdout)
+
+def test_engine_setting_is_validated():
+    import settings
+    assert settings.DEFAULTS["engine"] == "alphabeta", "the search stays the default"
+    assert set(settings.ENGINE_CHOICES) == {"alphabeta", "network"}
+    for choice in settings.ENGINE_CHOICES:
+        assert choice in settings.ENGINE_LABELS
+
+def test_backend_reports_why_it_is_unavailable():
+    """A missing checkpoint must be a toast, not a traceback in the UI thread."""
+    from nn import backend
+    old = os.environ.get(backend.ENV_CHECKPOINT)
+    os.environ[backend.ENV_CHECKPOINT] = "/nonexistent/checkpoint.pt"
+    try:
+        assert not backend.available()
+        assert "checkpoint" in backend.unavailable_reason()
+    finally:
+        if old is None:
+            del os.environ[backend.ENV_CHECKPOINT]
+        else:
+            os.environ[backend.ENV_CHECKPOINT] = old
+
+def test_backend_plays_a_legal_move_with_a_white_relative_score():
+    """The contract the GUI depends on: same shape as ai.find_best_move_with_score."""
+    from gamestate import GameState
+    from nn import backend
+
+    if not backend.available():
+        pytest.skip("no trained checkpoint on this machine")
+
+    gs = GameState()
+    gs.setup_initial_board()
+    move, score = backend.find_best_move_with_score(gs)
+    assert move in gs.get_all_legal_moves()
+    assert isinstance(score, float)
+
+    # Scores are white-relative everywhere (CLAUDE.md), so the same position evaluated
+    # with Black to move must not silently flip meaning.
+    gs.make_move(move, False)
+    gs.check_game_over()
+    move_b, score_b = backend.find_best_move_with_score(gs)
+    assert move_b in gs.get_all_legal_moves()
+    assert isinstance(score_b, float)

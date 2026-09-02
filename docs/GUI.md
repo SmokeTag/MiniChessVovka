@@ -80,6 +80,38 @@ no search.
   transposition table *per search*, so every concurrent worker is tens of MB of RSS — the one
   consequence the window cannot otherwise show, which is why `set_hint_workers` names it in its toast.
 
+## Choosing the engine
+
+The **Engine** button (bottom of the controls column) switches the AI's moves between the
+alpha-beta search and the phase-2 policy network (`nn/backend.py`, `docs/ZERO.md`). It
+defaults to the search, and the setting persists in `gui_settings.json`.
+
+- **Selecting the network is what loads torch.** `thread_utils.AIThread` imports
+  `nn.backend` inside `run()`, never at module scope, so a user who never touches the
+  button never pays for the CUDA stack — and the several seconds of first import happen
+  on the worker thread, where the "search never blocks the UI" invariant already covers
+  them. `tests/test_nn.py::test_the_front_ends_do_not_import_torch` checks this in a
+  subprocess, because in-process it would prove nothing.
+- **The toggle refuses rather than breaking.** `backend.available()` answers from the
+  filesystem without importing torch, and `unavailable_reason()` says which of "torch is
+  not installed" and "no trained checkpoint" applies. Both must agree on every branch or
+  the GUI formats `None` into a toast.
+- **The checkpoint is the newest `best.pt`** under `$MINIZERO_DATA/checkpoints/*/`, or
+  `$MINIZERO_CHECKPOINT`. Training a new one is enough to make the GUI play it; there is
+  no second place to update and so no way for the two to disagree.
+- **The readout says `network`, not `depth N`.** `set_search_score` takes the source
+  because "static", "depth 10" and "network" are different claims about the same number.
+  The network has no depth, so `player_label` says "network" rather than naming a search
+  that did not happen. The score is the value head put back through
+  `VALUE_SCALE * atanh(v)` and flipped into the white-relative convention everything
+  else in the app speaks.
+- **Hints always use the search.** The network has no depth to vary and no ranked lines
+  to show, so the hint path is untouched.
+
+**It is much weaker than the search** — a raw policy argmax, one forward pass, no tree.
+`docs/ZERO.md` measures it at 0.970 against random but ~0.1 against depth-2 alpha-beta.
+Playing it at depth 6 will not feel like a fair fight; that is the phase, not a bug.
+
 **More than one hint line means MultiPV.** `HintThread(lines=n)` with `n > 1` calls
 `find_best_move(..., return_top_n=n)`, several times the cost of a single-PV search at the same depth
 — that cost is why the count is a user-facing setting and why the label names the multiplier. `n == 1`

@@ -22,6 +22,17 @@ DEFAULTS = {
     "show_eval": True,
     "board_flipped": None,
     "sound": False,
+    "engine": "alphabeta",
+}
+
+# Which engine plays the AI's moves. "network" is the phase-2 policy net playing raw
+# argmax with no search; it is much weaker than the alpha-beta search (docs/ZERO.md) and
+# is here to be played against and inspected. Selecting it is what loads torch.
+ENGINE_CHOICES = ["alphabeta", "network"]
+
+ENGINE_LABELS = {
+    "alphabeta": "alpha-beta search",
+    "network": "policy net, no search",
 }
 
 DEPTH_CHOICES = [2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -67,6 +78,8 @@ def load():
     except (OSError, ValueError):
         pass
 
+    if values["engine"] not in ENGINE_CHOICES:
+        values["engine"] = DEFAULTS["engine"]
     if values["ai_depth"] not in DEPTH_CHOICES:
         values["ai_depth"] = DEFAULTS["ai_depth"]
     if values["hint_lines"] not in HINT_LINE_CHOICES:

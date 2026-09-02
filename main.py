@@ -83,6 +83,7 @@ class UIState:
         self.live_ply = 0
         self.movelist_scroll = 0
         self.depth = prefs['ai_depth']
+        self.engine = prefs['engine']
         self.ai_white = bool(prefs['white_ai'])
         self.ai_black = bool(prefs['black_ai'])
         self.can_undo = False
@@ -186,9 +187,21 @@ class UIState:
         human_turn = not (self.ai_white and self.ai_black)
         return "Your move" if human_turn else "Engine idle"
 
+    @property
+    def engine_label(self):
+        return settings.ENGINE_LABELS.get(self.engine, self.engine)
+
+    @property
+    def uses_network(self):
+        return self.engine == 'network'
+
     def player_label(self, color):
         is_ai = self.ai_white if color == 'w' else self.ai_black
-        return f"engine · depth {self.depth}" if is_ai else "you"
+        if not is_ai:
+            return "you"
+        # The network has no depth to report; saying "depth 6" beside it would be a
+        # claim about a search that did not happen.
+        return "network" if self.uses_network else f"engine · depth {self.depth}"
 
     def status_message(self):
         """(text, colour) for the bottom band, highest priority first."""
@@ -286,6 +299,7 @@ class Game:
             'hint_lines': self.ui.hint_lines,
             'hint_workers': self.ui.hint_workers,
             'board_flipped': self.ui.flipped,
+            'engine': self.ui.engine,
         })
         settings.save(self.prefs)
 
@@ -414,12 +428,17 @@ class Game:
             self.toast("Nothing to save for this position.", PANEL_COLORS['warn'])
         self.dirty = True
 
-    def set_search_score(self, score, depth):
-        """Record a score that a completed search stands behind."""
+    def set_search_score(self, score, depth, source=None):
+        """Record a score that a completed search stands behind.
+
+        `source` names where the number came from, because "static", "depth 10" and
+        "network" are different claims about the same number and the readout always
+        shows which (docs/GUI.md).
+        """
         if score is None:
             return
         self.ui.score = int(score)
-        self.ui.score_source = f"depth {depth}"
+        self.ui.score_source = source or f"depth {depth}"
         self.dirty = True
 
     def toast(self, text, color=None):
@@ -597,7 +616,7 @@ class Game:
             self.dirty = True
             return
         self.gs.ai_depth = self.ui.depth
-        thread = AIThread(self.gs, self.ui.depth)
+        thread = AIThread(self.gs, self.ui.depth, engine=self.ui.engine)
         thread.generation = self.generation
         thread.start()
         self.ai_thread = thread
@@ -643,7 +662,8 @@ class Game:
         self.last_move_at = time.time()
         self.invalidate()
         if move is thread.best_move:
-            self.set_search_score(thread.score, thread.depth)
+            self.set_search_score(thread.score, thread.depth,
+                                  source="network" if thread.engine == 'network' else None)
         self.sync_ui()
 
     def start_hint_if_needed(self):
@@ -869,6 +889,32 @@ class Game:
         self.invalidate()
         self.sync_ui()
 
+    def toggle_engine(self):
+        """Switch between the alpha-beta search and the policy network.
+
+        Refuses rather than switching when there is nothing to switch to, and says which
+        of the two reasons it is. Checked here, on the UI thread, without importing
+        torch — `backend.available()` answers from the filesystem.
+        """
+        if self.ui.uses_network:
+            self.ui.engine = 'alphabeta'
+            self.toast("Engine: alpha-beta search.", PANEL_COLORS['text_dim'])
+        else:
+            from nn import backend
+            if not backend.available():
+                self.toast("No network to play — %s." % backend.unavailable_reason(),
+                           PANEL_COLORS['warn'])
+                return
+            self.ui.engine = 'network'
+            self.toast("Engine: policy network, no search.\n"
+                       "Much weaker than the search — it plays one forward pass.",
+                       PANEL_COLORS['accent'])
+        # The engine's own move is now answered by a different engine; anything already
+        # in flight belongs to the old one.
+        self.invalidate()
+        self.save_prefs()
+        self.dirty = True
+
     def handle_button(self, name):
         if name == 'undo':
             self.undo_one_ply()
@@ -883,6 +929,8 @@ class Game:
             self.drop_hint()
             self.relayout()
             self.toast(f"Hints {'on' if self.ui.show_hint else 'off'}.", PANEL_COLORS['text_dim'])
+        elif name == 'toggle_engine':
+            self.toggle_engine()
         elif name == 'toggle_flip':
             self.ui.flipped = not self.ui.flipped
             self.dirty = True

@@ -190,6 +190,11 @@ Three things that are not guessable from the code:
 Checkpoints carry the encoding they were trained against and refuse to load against a
 different one: otherwise a plane-layout change loads cleanly and plays nonsense.
 
+**The GUI can play the network** — the Engine button, via `nn/backend.py`. Selecting it
+is what imports torch: `thread_utils.AIThread` imports the backend inside `run()`, never
+at module scope, and `tests/test_nn.py` checks in a subprocess that importing the front
+ends pulls no torch. The readout says `network`, not `depth N`. See `docs/GUI.md`.
+
 ### The opening book, in one paragraph
 
 `engine_rs/src/cache.rs` persists the book to `book.db` (SQLite, repo root, gitignored); `book.tsv`
