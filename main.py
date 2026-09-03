@@ -78,12 +78,15 @@ class UIState:
         self.thinking = False
         self.think_started = 0.0
         self.think_depth = prefs['ai_depth']
+        self.think_engine = prefs['engine']
+        self.think_net_seconds = prefs['net_seconds']
         self.history = []
         self.view_ply = 0
         self.live_ply = 0
         self.movelist_scroll = 0
         self.depth = prefs['ai_depth']
         self.engine = prefs['engine']
+        self.net_seconds = prefs['net_seconds']
         self.ai_white = bool(prefs['white_ai'])
         self.ai_black = bool(prefs['black_ai'])
         self.can_undo = False
@@ -119,6 +122,30 @@ class UIState:
     @property
     def can_depth_down(self):
         return self.depth > settings.DEPTH_CHOICES[0]
+
+    @property
+    def think_label(self):
+        """What the search in flight was asked for. The network has no depth, so naming
+        one beside it would be a claim about a search that did not happen."""
+        if self.think_engine == 'network':
+            return f"network · {settings.format_net_time(self.think_net_seconds)}"
+        return f"depth {self.think_depth}"
+
+    @property
+    def net_seconds_text(self):
+        return settings.format_net_time(self.net_seconds)
+
+    @property
+    def net_seconds_label(self):
+        return settings.net_time_label(self.net_seconds)
+
+    @property
+    def can_net_up(self):
+        return self.net_seconds < settings.NET_TIME_CHOICES[-1]
+
+    @property
+    def can_net_down(self):
+        return self.net_seconds > settings.NET_TIME_CHOICES[0]
 
     @property
     def hint_lines_label(self):
@@ -200,8 +227,11 @@ class UIState:
         if not is_ai:
             return "you"
         # The network has no depth to report; saying "depth 6" beside it would be a
-        # claim about a search that did not happen.
-        return "network" if self.uses_network else f"engine · depth {self.depth}"
+        # claim about a search that did not happen. Its budget is a time, so that is
+        # what is named.
+        if self.uses_network:
+            return f"network · {self.net_seconds_text}"
+        return f"engine · depth {self.depth}"
 
     def status_message(self):
         """(text, colour) for the bottom band, highest priority first."""
@@ -300,6 +330,7 @@ class Game:
             'hint_workers': self.ui.hint_workers,
             'board_flipped': self.ui.flipped,
             'engine': self.ui.engine,
+            'net_seconds': self.ui.net_seconds,
         })
         settings.save(self.prefs)
 
@@ -616,13 +647,16 @@ class Game:
             self.dirty = True
             return
         self.gs.ai_depth = self.ui.depth
-        thread = AIThread(self.gs, self.ui.depth, engine=self.ui.engine)
+        thread = AIThread(self.gs, self.ui.depth, engine=self.ui.engine,
+                          net_seconds=self.ui.net_seconds)
         thread.generation = self.generation
         thread.start()
         self.ai_thread = thread
         self.ui.thinking = True
         self.ui.think_started = time.time()
         self.ui.think_depth = self.ui.depth
+        self.ui.think_engine = self.ui.engine
+        self.ui.think_net_seconds = self.ui.net_seconds
         self.dirty = True
 
     def poll_ai(self):
@@ -804,6 +838,33 @@ class Game:
                    PANEL_COLORS['text_dim'])
         self.dirty = True
 
+    def set_net_seconds(self, seconds):
+        """How long the network searches for each move. Says so even when it cannot.
+
+        The network's analogue of the depth control, and it obeys the same rule: a
+        setting the user can see is the one that runs. It is a time rather than a
+        simulation count because a simulation costs whatever the position makes it cost
+        (docs/GUI.md), so only the time is a promise the GUI can keep.
+        """
+        if seconds == self.ui.net_seconds:
+            edge = "longest" if seconds == settings.NET_TIME_CHOICES[-1] else "shortest"
+            self.toast(f"{settings.format_net_time(seconds)} is the {edge} the network "
+                       "will think.", PANEL_COLORS['warn'])
+            return
+        self.ui.net_seconds = seconds
+        # A search already in flight was started under the old budget, so its answer is
+        # not the one this setting promises -- the same reason `set_depth` bumps it.
+        self.generation += 1
+        self.dirty = True
+        text = settings.format_net_time(seconds)
+        if not self.ui.uses_network:
+            self.toast(f"Network thinks for {text} — switch the engine to use it.",
+                       PANEL_COLORS['warn'])
+            return
+        note = settings.net_time_label(seconds)
+        self.toast(f"Network thinks for {text} — {note}." if note else
+                   f"Network thinks for {text}.", PANEL_COLORS['text_dim'])
+
     def set_hint_lines(self, lines):
         """How many ranked moves the hint asks for.
 
@@ -906,8 +967,8 @@ class Game:
                            PANEL_COLORS['warn'])
                 return
             self.ui.engine = 'network'
-            self.toast("Engine: policy network, no search.\n"
-                       "Much weaker than the search — it plays one forward pass.",
+            self.toast("Engine: network + MCTS.\n"
+                       f"It searches for {self.ui.net_seconds_text} a move, not to a depth.",
                        PANEL_COLORS['accent'])
         # The engine's own move is now answered by a different engine; anything already
         # in flight belongs to the old one.
@@ -942,6 +1003,10 @@ class Game:
             self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, 1))
         elif name == 'lines_down':
             self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, -1))
+        elif name == 'nettime_up':
+            self.set_net_seconds(settings.cycle_net_seconds(self.ui.net_seconds, 1))
+        elif name == 'nettime_down':
+            self.set_net_seconds(settings.cycle_net_seconds(self.ui.net_seconds, -1))
         elif name == 'workers_up':
             self.set_hint_workers(settings.cycle_hint_workers(self.ui.hint_workers, 1))
         elif name == 'workers_down':
@@ -1008,6 +1073,8 @@ class Game:
                 self.set_hint_lines(settings.cycle_hint_lines(self.ui.hint_lines, step))
             elif name == 'workers':
                 self.set_hint_workers(settings.cycle_hint_workers(self.ui.hint_workers, step))
+            elif name == 'nettime':
+                self.set_net_seconds(settings.cycle_net_seconds(self.ui.net_seconds, step))
             return True
         return False
 

@@ -212,10 +212,15 @@ step up the path. `tests/test_mcts.py` drives all of it against a deliberately u
 evaluator — with a trained network you cannot tell a working search from a working
 policy.
 
-**The GUI can play the network** — the Engine button, via `nn/backend.py`. Selecting it
-is what imports torch: `thread_utils.AIThread` imports the backend inside `run()`, never
-at module scope, and `tests/test_nn.py` checks in a subprocess that importing the front
-ends pulls no torch. The readout says `network`, not `depth N`. See `docs/GUI.md`.
+**The GUI can play the network** — the Engine button, via `nn/backend.py`, and it
+searches: `nn/mcts.py` drives the Rust tree and plays the most-visited root move.
+Selecting it is what imports torch: `thread_utils.AIThread` imports the backend inside
+`run()`, never at module scope, and `tests/test_nn.py` checks in a subprocess that
+importing the front ends pulls no torch. **Its budget is a time, not a simulation
+count** — a simulation costs whatever the position makes it cost, so only the clock is a
+promise a GUI can keep; `nn.mcts.search` takes `simulations`, `time_limit` or both, and
+the arena and self-play keep counting simulations because a measurement wants
+reproducibility. The readout says `network`, not `depth N`. See `docs/GUI.md`.
 
 ### The opening book, in one paragraph
 

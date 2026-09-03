@@ -135,6 +135,50 @@ def test_batching_does_not_change_what_is_searched():
         assert tree.simulations == 300, (batch, tree.simulations)
         assert sum(v for _, v in tree.root_visits()) == 299
 
+def test_a_time_budget_stops_the_search():
+    """The GUI's budget is a clock, not a count (docs/GUI.md).
+
+    A deadline that is not honoured is the whole failure mode here, and it is one an
+    interactive front end feels directly: the setting the user picked is the wait they
+    were promised. The deadline is only read between batches, so the search may run one
+    batch past it -- checked with a generous ceiling rather than a tight one, because a
+    loaded machine makes a tight bound flaky without making it a better test.
+    """
+    import time
+
+    slow = Uniform()
+    started = time.monotonic()
+    tree = mcts.search(opening(), slow, simulations=None, batch=8, time_limit=0.2)
+    elapsed = time.monotonic() - started
+
+    assert 0.2 <= elapsed < 1.0, "a 0.2s budget ran for %.3fs" % elapsed
+    assert tree.simulations > 0, "the deadline stopped the search before it started"
+
+def test_a_budget_too_small_to_honour_still_chooses_a_move():
+    """A deadline already past must not return the root untouched.
+
+    With only the root expanded every child has zero visits, so `best_move` falls through
+    to whichever edge comes first -- a move nothing selected, handed back as though the
+    search had picked it. Worse than slow, and invisible: it is a legal move with a
+    plausible score. The first two rounds therefore run regardless of the clock.
+    """
+    tree = mcts.search(opening(), Uniform(), simulations=None, batch=8, time_limit=0.0)
+    assert tree.simulations > 1
+    assert max(v for _, v in tree.root_visits()) > 0, "no child was ever visited"
+    assert tree.best_move() in opening().get_all_legal_moves()
+
+def test_a_simulation_cap_still_wins_when_both_are_given():
+    """Whichever budget binds first stops the search. A time limit far in the future
+    must not turn a simulation count into an unbounded run, or the arena's numbers stop
+    meaning what they say."""
+    tree = mcts.search(opening(), Uniform(), simulations=200, batch=8, time_limit=60.0)
+    assert tree.simulations == 200
+
+def test_a_search_with_no_budget_is_refused():
+    """Silently searching forever is the one outcome worse than an error."""
+    with pytest.raises(ValueError, match="budget"):
+        mcts.search(opening(), Uniform(), simulations=None, time_limit=None)
+
 def test_expand_rejects_a_mismatched_batch():
     """The Rust side must not be fed rows it did not ask for."""
     tree = rs.Mcts(opening())

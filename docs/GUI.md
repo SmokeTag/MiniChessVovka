@@ -23,7 +23,13 @@ the current window size; nothing else may assume a pixel dimension. Four invaria
   reserved, and only the move list flexes. Hands live in strips beside the board and show a `×N`
   count rather than one sprite per copy, so a filling hand can never push a button out from under the
   cursor. The hint-lines list is sized from `Layout(..., analysis_rows=n)` — a *setting*, never live
-  search state, so it cannot resize mid-search. Changing it calls `Game.relayout()`.
+  search state, so it cannot resize mid-search. Changing it calls `Game.relayout()`. When the
+  reserved bands want more panel than a short window has, the two flexing zones give way in order
+  rather than painting over each other: the move list takes what is left and collapses to nothing,
+  and the analysis band then shows as many of the requested rows as still fit (`Layout` clamps
+  `analysis_rows`, and `gui._draw_analysis` bounds its row loop by that same count).
+  `tests/test_gui_controls.py::test_panel_bands_never_paint_over_each_other` sweeps the window
+  sizes and hint-line counts that used to overlap.
 - **Redraw is dirty-flagged.** `Game.dirty` gates rendering; the loop idles at `IDLE_FPS` and rises
   to `FPS` only while something animates. Fonts and scaled sprites are memoised in `gui.py`. Any new
   per-frame `smoothscale` undoes this.
@@ -83,7 +89,7 @@ no search.
 ## Choosing the engine
 
 The **Engine** button (below the steppers, above Save position to book) switches the AI's moves between the
-alpha-beta search and the phase-2 policy network (`nn/backend.py`, `docs/ZERO.md`). It
+alpha-beta search and the network searched with MCTS (`nn/backend.py`, `docs/ZERO.md`). It
 defaults to the search, and the setting persists in `gui_settings.json`.
 
 - **Selecting the network is what loads torch.** `thread_utils.AIThread` imports
@@ -101,27 +107,75 @@ defaults to the search, and the setting persists in `gui_settings.json`.
   no second place to update and so no way for the two to disagree.
 - **The readout says `network`, not `depth N`.** `set_search_score` takes the source
   because "static", "depth 10" and "network" are different claims about the same number.
-  The network has no depth, so `player_label` says "network" rather than naming a search
-  that did not happen. The score is the value head put back through
-  `VALUE_SCALE * atanh(v)` and flipped into the white-relative convention everything
-  else in the app speaks — **but it is not a trustworthy position assessment**: the value
-  head carries a side-to-move bias from its teacher set and reads about +178cp at the
-  opening position, where the search says +6. Read the moves, not the number
+  The network has no depth, so `player_label` says "network · 0.5s" and the thinking row
+  (`ui.think_label`) names the budget rather than a search that did not happen. The score
+  is the MCTS root's mean value put back through `VALUE_SCALE * atanh(v)` and flipped
+  into the white-relative convention everything else in the app speaks — **but it is not
+  a trustworthy position assessment**: the value head carries a side-to-move bias from
+  its teacher set and reads about +178cp at the opening position, where the search says
+  +6. The tree averages that bias rather than removing it. Read the moves, not the number
   (`docs/ZERO.md`).
 - **Hints always use the search.** The network has no depth to vary and no ranked lines
   to show, so the hint path is untouched.
-- **It needed a grid row of its own.** The controls grid is eight rows; rows 3-5 are the
-  steppers, so a new button has to take a row nothing else claims. Adding one at a row
-  that was already occupied made the two controls fail in opposite directions — drawing
-  is sequential so the later one painted over the earlier, while hit-testing returns on
-  the first match in insertion order, so the *invisible* control took the clicks.
-  `tests/test_gui_controls.py` now asserts no two hit regions overlap, which is the
-  machine-checkable form of the "a control can never be clickable where it is not
-  visible" invariant above.
+- **Every control needs a grid row of its own.** The controls grid is nine rows: 0-2
+  buttons, 3-5 the hint/depth steppers, 6 the Engine button, 7 the network's budget, 8
+  Save position to book. `layout.controls_h` counts them, so adding a control means
+  bumping that count as well as picking a free row. Reusing an occupied row makes the two
+  controls fail in opposite directions — drawing is sequential so the later one paints
+  over the earlier, while hit-testing returns on the first match in insertion order, so
+  the *invisible* control takes the clicks. `tests/test_gui_controls.py` asserts no two
+  hit regions overlap, which is the machine-checkable form of the "a control can never be
+  clickable where it is not visible" invariant above.
 
-**It is much weaker than the search** — a raw policy argmax, one forward pass, no tree.
-`docs/ZERO.md` measures it at 0.970 against random but ~0.1 against depth-2 alpha-beta.
-Playing it at depth 6 will not feel like a fair fight; that is the phase, not a bug.
+### The network's budget is a time, not a depth
+
+The **Network** stepper directly under the Engine button sets how long MCTS searches for
+each of the engine's moves: `settings.NET_TIME_CHOICES`, 0.1s to 5s, default 0.5s,
+persisted as `net_seconds`. It reads like the depth stepper and obeys the same rule — the
+setting the user can see is the one that runs — but it counts seconds rather than plies.
+
+- **Why time and not simulations.** A simulation costs whatever the position makes it
+  cost: a full-hand middlegame descends further and branches wider than an opening, so
+  the same count is not the same wait twice running. The wait is what an interactive user
+  is actually spending, and it is the only budget the GUI can promise. It is also the
+  unit the project's own success bar is stated in (`docs/ZERO.md`): equal *time control*
+  against alpha-beta, which is why "800 sims" was retired as a gate. The arena and the
+  self-play loop still count simulations, because a measurement wants reproducibility
+  rather than a clock; `nn.mcts.search` takes either, or both, and stops at the first.
+- **0.5s is the default because it is roughly what depth 6 costs.** ~4,000 simulations at
+  the opening on this machine, against the 2,400 that drew level with depth-6 alpha-beta
+  at 343ms a move. The two engines therefore feel like each other out of the box.
+- **The first move pays no warm-up out of its budget.** The first forward pass on a
+  fresh CUDA device builds the context and picks kernels — ~250ms here, a whole default
+  think time — so before `nn.backend._Network._warm_up` the first network move came back
+  after *one* simulation, which is a move nothing chose. The warm-up runs at load, on the
+  background thread where a slow start is already covered. `nn.mcts.search` guards the
+  same failure from the other side: the deadline cannot stop a search that has not yet
+  visited a child.
+- **The deadline is read between batches**, so a move can overrun it by one network call
+  — a few milliseconds at the batch of 16 `nn.backend.DEFAULT_BATCH` fixes. The batch is
+  not user-facing: it is a throughput knob whose value (~8x, from virtual loss) is
+  measured in `docs/ZERO.md`, and above 16 the cost is marshalling planes across PyO3
+  rather than GPU time.
+- **It is muted, not hidden, while the alpha-beta engine is selected**, the same way the
+  hint steppers mute when hints are off — a ladder that appears and disappears moves the
+  buttons under the cursor. Changing it while the search is alpha-beta toasts that it
+  will not take effect yet.
+- **No key binding.** The wheel over the stepper nudges it (`hits['wheel']['nettime']`),
+  which is what the status band already advertises; the letter keys are full.
+- **Changing it bumps `generation`**, like `set_depth`: a search already in flight was
+  started under the old budget and is not the answer the new setting promises.
+
+**Tree reuse across moves is not implemented.** The engine builds a fresh tree every move,
+so the subtree under the move actually played — worth roughly 2x — is discarded. Doing it
+needs a re-root on the Rust side (`rs.Mcts` only takes a starting position) plus a tree
+kept alive across `AIThread`s, which the GUI's deep-copy-per-move path does not currently
+allow.
+
+**It is now competitive with the search**, which it was not as a raw policy argmax:
+`docs/ZERO.md` measures the same weights at 0.185 against depth-2 with no tree and 0.833
+with 800 simulations, and level with depth-6 at 2,400. Playing it against depth 6 is a
+fair fight.
 
 **More than one hint line means MultiPV.** `HintThread(lines=n)` with `n > 1` calls
 `find_best_move(..., return_top_n=n)`, several times the cost of a single-PV search at the same depth

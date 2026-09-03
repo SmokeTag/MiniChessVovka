@@ -286,6 +286,21 @@ def test_engine_setting_is_validated():
     for choice in settings.ENGINE_CHOICES:
         assert choice in settings.ENGINE_LABELS
 
+def test_the_network_budget_ladder_matches_the_backend():
+    """The GUI's default has to be a rung of its own ladder, or `load()` silently
+    rewrites the user's setting; and it has to be the budget the backend would pick on
+    its own, or "the setting the user sees is the one that runs" (docs/GUI.md) is false
+    for anyone who never touches the stepper."""
+    import settings
+    from nn import backend
+
+    assert settings.DEFAULTS["net_seconds"] in settings.NET_TIME_CHOICES
+    assert settings.DEFAULTS["net_seconds"] == backend.DEFAULT_THINK_SECONDS
+    assert settings.NET_TIME_CHOICES == sorted(settings.NET_TIME_CHOICES)
+    for rung in settings.NET_TIME_CHOICES:
+        assert settings.net_time_label(rung), "rung %s has no cost label" % rung
+    assert settings.load()["net_seconds"] in settings.NET_TIME_CHOICES
+
 def test_backend_reports_why_it_is_unavailable():
     """A missing checkpoint must be a toast, not a traceback in the UI thread."""
     from nn import backend
@@ -300,6 +315,22 @@ def test_backend_reports_why_it_is_unavailable():
         else:
             os.environ[backend.ENV_CHECKPOINT] = old
 
+def _python_state(fen):
+    """A `gamestate.GameState` holding what a FEN says. `ai.from_fen` returns the *Rust*
+    state, and the GUI's engines are handed the Python one."""
+    import ai
+    from gamestate import GameState
+
+    parsed = ai.from_fen(fen)
+    gs = GameState()
+    gs.board = [list(row) for row in parsed.board]
+    gs.current_turn = parsed.current_turn
+    gs.hands = {color: dict(hand) for color, hand in parsed.hands.items()}
+    gs.promoted_pieces = set(tuple(square) for square in parsed.promoted_pieces)
+    gs.find_kings()
+    gs._all_legal_moves_cache = None
+    return gs
+
 def test_backend_plays_a_legal_move_with_a_white_relative_score():
     """The contract the GUI depends on: same shape as ai.find_best_move_with_score."""
     from gamestate import GameState
@@ -310,7 +341,7 @@ def test_backend_plays_a_legal_move_with_a_white_relative_score():
 
     gs = GameState()
     gs.setup_initial_board()
-    move, score = backend.find_best_move_with_score(gs)
+    move, score = backend.find_best_move_with_score(gs, seconds=0.2)
     assert move in gs.get_all_legal_moves()
     assert isinstance(score, float)
 
@@ -318,6 +349,66 @@ def test_backend_plays_a_legal_move_with_a_white_relative_score():
     # with Black to move must not silently flip meaning.
     gs.make_move(move, False)
     gs.check_game_over()
-    move_b, score_b = backend.find_best_move_with_score(gs)
+    move_b, score_b = backend.find_best_move_with_score(gs, seconds=0.2)
     assert move_b in gs.get_all_legal_moves()
     assert isinstance(score_b, float)
+
+def test_backend_searches_rather_than_playing_the_raw_policy():
+    """The move must come from a tree, not from one forward pass.
+
+    A backend that quietly fell back to a policy argmax would still return a legal move
+    and a plausible score -- the failure this project cares about most, since the same
+    weights score 0.185 against depth-2 as an argmax and 0.833 with 800 simulations
+    (docs/ZERO.md). The evidence a search happened is the simulation count, and that a
+    longer budget buys more of them.
+    """
+    from gamestate import GameState
+    from nn import backend
+
+    if not backend.available():
+        pytest.skip("no trained checkpoint on this machine")
+
+    gs = GameState()
+    gs.setup_initial_board()
+
+    backend.find_best_move_with_score(gs, seconds=0.05)   # pay the first-load cost here
+    backend.find_best_move_with_score(gs, seconds=0.1)
+    few, _ = backend.last_search_stats()
+    backend.find_best_move_with_score(gs, seconds=0.5)
+    many, _ = backend.last_search_stats()
+
+    assert few > 1, "no simulations ran -- this is the raw policy, not a search"
+    assert many > few, ("a 5x budget bought no extra simulations (%d then %d)"
+                        % (few, many))
+
+def test_the_network_score_is_white_relative_on_both_sides():
+    """Positive favours White whichever side is to move (CLAUDE.md).
+
+    MCTS values are in the frame of the side to move at each node, so the root's value
+    has to be flipped for Black -- and a missing flip is invisible in ordinary play,
+    where scores near zero look reasonable either way. These two positions are the same
+    position rotated 180 degrees with the colours swapped: one is mate in one for White,
+    the other mate in one for Black. The scores must be opposite, and the moves mirrored.
+    """
+    from nn import backend
+
+    if not backend.available():
+        pytest.skip("no trained checkpoint on this machine")
+
+    # `k5/6/1K4/6/6/5R w` is tests/test_mcts.py's MATE_IN_ONE; the second is its mirror.
+    white = _python_state("k5/6/1K4/6/6/5R w")
+    black = _python_state("r5/6/6/4k1/6/5K b")
+
+    white_move, white_score = backend.find_best_move_with_score(white, seconds=0.2)
+    black_move, black_score = backend.find_best_move_with_score(black, seconds=0.2)
+
+    assert white_move in white.get_all_legal_moves()
+    assert black_move in black.get_all_legal_moves()
+    assert white_score > 0, "a mate for White read %.1f" % white_score
+    assert black_score < 0, "a mate for Black read %.1f" % black_score
+
+    def mirror(square):
+        return (5 - square[0], 5 - square[1])
+
+    assert (mirror(black_move[0]), mirror(black_move[1])) == (white_move[0], white_move[1]), (
+        "the mirrored position was not answered with the mirrored move")

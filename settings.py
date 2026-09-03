@@ -23,17 +23,44 @@ DEFAULTS = {
     "board_flipped": None,
     "sound": False,
     "engine": "alphabeta",
+    "net_seconds": 0.5,
 }
 
-# Which engine plays the AI's moves. "network" is the phase-2 policy net playing raw
-# argmax with no search; it is much weaker than the alpha-beta search (docs/ZERO.md) and
-# is here to be played against and inspected. Selecting it is what loads torch.
+# Which engine plays the AI's moves. "network" is the policy-value net searched with
+# MCTS (nn/backend.py, docs/ZERO.md). Selecting it is what loads torch.
 ENGINE_CHOICES = ["alphabeta", "network"]
 
 ENGINE_LABELS = {
     "alphabeta": "alpha-beta search",
-    "network": "policy net, no search",
+    "network": "network + MCTS",
 }
+
+# The network's budget, in seconds of search per move. It is a *time* rather than a
+# simulation count because a simulation costs whatever the position makes it cost, so a
+# fixed count is not a fixed wait — and a wait is what the user is spending. Depth does
+# the same job for the alpha-beta search, and the two ladders are read the same way:
+# every rung is a setting the user can see, and it is the one that runs.
+NET_TIME_CHOICES = [0.1, 0.25, 0.5, 1.0, 2.0, 5.0]
+
+# Simulation counts measured from the opening on this machine (~8k/s at a batch of 16).
+# They are a guide, not a promise -- that is the whole reason the setting is a clock: a
+# middlegame with full hands branches wider and costs more per simulation. For scale,
+# 2,400 is the count that drew level with depth-6 alpha-beta at slightly less time per
+# move (docs/ZERO.md).
+NET_TIME_LABELS = {
+    0.1: "instant · ~800 sims",
+    0.25: "fast · ~2k sims",
+    0.5: "balanced · ~4k sims",
+    1.0: "strong · ~8k sims",
+    2.0: "very strong",
+    5.0: "slow · for analysis",
+}
+
+def net_time_label(seconds):
+    return NET_TIME_LABELS.get(seconds, "")
+
+def format_net_time(seconds):
+    return f"{seconds:g}s"
 
 DEPTH_CHOICES = [2, 3, 4, 5, 6, 7, 8, 9, 10]
 
@@ -82,6 +109,8 @@ def load():
         values["engine"] = DEFAULTS["engine"]
     if values["ai_depth"] not in DEPTH_CHOICES:
         values["ai_depth"] = DEFAULTS["ai_depth"]
+    if values["net_seconds"] not in NET_TIME_CHOICES:
+        values["net_seconds"] = DEFAULTS["net_seconds"]
     if values["hint_lines"] not in HINT_LINE_CHOICES:
         values["hint_lines"] = DEFAULTS["hint_lines"]
     workers = hint_worker_choices()
@@ -125,3 +154,6 @@ def cycle_hint_lines(current, step):
 
 def cycle_hint_workers(current, step):
     return _cycle(hint_worker_choices(), current, step, DEFAULTS["hint_workers"])
+
+def cycle_net_seconds(current, step):
+    return _cycle(NET_TIME_CHOICES, current, step, DEFAULTS["net_seconds"])

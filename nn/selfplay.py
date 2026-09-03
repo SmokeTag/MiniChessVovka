@@ -6,11 +6,9 @@ move and a centipawn score. A self-play record carries what the search itself be
 the full root visit distribution as the policy target, and the eventual game result as the
 value target. No alpha-beta anywhere, which is the whole point of going zero.
 
-**Root Dirichlet noise is applied here, in Python, not in the Rust tree.** The first
-`collect()` on a fresh tree returns exactly one leaf -- the root -- so the first evaluator
-call of a search is the only place the root's priors are ever set. Rust reads priors only
-at the legal actions and renormalises them, so mixing the noise over the legal set (and
-leaving it summing to 1 there) makes that renormalisation a no-op and reproduces
+**Root Dirichlet noise is applied here, in Python, not in the Rust tree.** It is mixed
+into the root's priors the moment the root is expanded, over the legal moves and only
+those -- `tree.root_priors()` is already one entry per legal move, so this reproduces
 AlphaZero's rule exactly:
 
     P(s,a) = (1 - eps) * p_a + eps * eta_a,   eta ~ Dir(alpha) over legal actions only
@@ -19,6 +17,17 @@ Spreading Dir over all 2,196 logits and letting Rust renormalise would *not* be 
 rule -- the noise mass landing on illegal actions is discarded, so the effective epsilon
 shrinks by a random amount that depends on the branching factor. That difference is silent
 and would only show up as self-play that never explores.
+
+It goes in through `set_root_priors` rather than by perturbing the evaluator's answer,
+because with tree reuse the root usually arrives **already expanded** from the previous
+move's search: there is no "first evaluator call" left to intercept. `nn.mcts.search`
+calls the hook at the one moment both cases share.
+
+**One tree per game, re-rooted after every move** (`nn.mcts.Searcher`). The subtree under
+the move just played is the right tree for the position that follows, so the next search
+starts with those visits banked. The `--sims` budget still counts new simulations, which
+keeps a number comparable across runs; `tree.root_total_visits` is where the root actually
+ended up.
 
 Records reuse `teacher.restore`'s field names (fen/ply/ply_limit/reps) so the same
 position-not-encoding indirection applies: a plane-layout change costs a re-encode, not a
@@ -50,90 +59,34 @@ DEFAULT_BATCH = 128
 PLY_LIMIT = 200
 
 
-def _mix_root_noise(priors, legal, rng, alpha, eps):
-    """Return priors with Dirichlet noise mixed in over `legal`, summing to 1 there."""
-    p = priors[legal].astype(np.float64)
+def _apply_root_noise(tree, rng, alpha, eps):
+    """Mix Dirichlet noise into the root's priors, in place, over the legal moves."""
+    p = np.asarray(tree.root_priors(), dtype=np.float64)
+    if p.size == 0:
+        return
     total = p.sum()
-    p = p / total if total > 0 else np.full(len(legal), 1.0 / len(legal))
-    eta = rng.dirichlet([alpha] * len(legal))
-    out = priors.copy()
-    out[legal] = (1.0 - eps) * p + eps * eta
-    return out
+    p = p / total if total > 0 else np.full(p.size, 1.0 / p.size)
+    eta = rng.dirichlet([alpha] * p.size)
+    tree.set_root_priors(((1.0 - eps) * p + eps * eta).astype(np.float32))
 
 
-class FastEvaluator:
-    """`nn.mcts.Evaluator`, with the Python-list marshalling taken off the hot path.
+def search_with_root_noise(searcher, gs, rng, sims, alpha, eps):
+    """One move's search, with the root's priors perturbed as soon as they are set.
 
-    Profiling one self-play worker at 400 sims found the network forward pass was ~3ms of
-    an 80ms ply; nearly everything else was converting Python lists at the PyO3 boundary.
-    `collect` hands back a list of 110k floats and `torch.tensor(list)` parses it at
-    4.6ms a call, where `np.fromiter` does the same job in 1.3ms.
-
-    Going the other way the result is counter-intuitive and was measured, not assumed:
-    `expand` accepts a numpy array, but PyO3 extracts `Vec<f32>` from it through the
-    sequence protocol one element at a time, which is *slower* than materialising a
-    Python list first. So the fast path is `fromiter` in and `.tolist()` out.
-
-    The remaining marshalling (~50ms/ply) is only removable at the Rust boundary itself,
-    by moving `collect`/`expand` to the buffer protocol. That is the next real lever.
+    The noise is a hook rather than a flag on `nn.mcts.search`: it belongs to self-play,
+    and an arena game or a GUI move must never get it.
     """
-
-    def __init__(self, net, device):
-        import torch
-        self.torch = torch
-        self.net = net.eval()
-        self.device = device
-        self.calls = 0
-        self.positions = 0
-
-    def __call__(self, flat_planes):
-        import minichess_engine as rs
-        torch = self.torch
-        n = len(flat_planes) // rs.ENCODE_INPUT_SIZE
-        a = np.fromiter(flat_planes, dtype=np.float32, count=len(flat_planes))
-        with torch.inference_mode():
-            x = torch.from_numpy(a).view(n, rs.ENCODE_PLANES, rs.BOARD_SIZE,
-                                         rs.BOARD_SIZE).to(self.device, non_blocking=True)
-            logits, values = self.net(x)
-            priors = logits.float().softmax(-1).reshape(-1).cpu().numpy()
-            vals = values.float().reshape(-1).cpu().numpy()
-        self.calls += 1
-        self.positions += n
-        return priors, vals
-
-
-def search_with_root_noise(gs, evaluator, rs, rng, sims, batch, alpha, eps):
-    """`nn.mcts.search`, with the root's priors perturbed on the one call that sets them.
-
-    Deliberately a copy of that loop rather than a flag on it: the noise belongs to
-    self-play, and an arena or a GUI move must never get it.
-    """
-    from nn import mcts
-
-    tree = rs.Mcts(gs, mcts.DEFAULT_C_PUCT)
-    first = True
-    while tree.simulations < sims:
-        want = min(batch, max(1, sims - tree.simulations))
-        before = tree.simulations
-        planes = tree.collect(want)
-        if planes:
-            priors, values = evaluator(planes)
-            if first:
-                # The first batch of a fresh tree is the root alone.
-                n = len(planes) // rs.ENCODE_INPUT_SIZE
-                assert n == 1, "expected the root alone in the first batch, got %d" % n
-                legal = np.asarray(rs.legal_action_indices(gs), dtype=np.int64)
-                priors = _mix_root_noise(np.asarray(priors), legal, rng, alpha, eps)
-                first = False
-            tree.expand(priors.tolist(), values.tolist())
-        elif tree.simulations == before:
-            break
-    return tree
+    return searcher.search(gs, simulations=sims,
+                           root_hook=lambda t: _apply_root_noise(t, rng, alpha, eps))
 
 
 def play_game(evaluator, rs, rng, sims, batch, alpha, eps, temp_plies):
     """One self-play game. Returns the records, with `z` filled in from the result."""
     from nn import mcts
+
+    # One tree for the whole game: every move re-roots it onto the position played
+    # rather than starting from an empty root.
+    searcher = mcts.Searcher(evaluator, simulations=sims, batch=batch)
 
     gs = rs.GameState()
     gs.setup_initial_board()
@@ -157,7 +110,7 @@ def play_game(evaluator, rs, rng, sims, batch, alpha, eps, temp_plies):
 
         fen = rs.to_fen(gs)
         turn = gs.current_turn
-        tree = search_with_root_noise(gs, evaluator, rs, rng, sims, batch, alpha, eps)
+        tree = search_with_root_noise(searcher, gs, rng, sims, alpha, eps)
 
         entries = tree.root_visits() if hasattr(tree, "root_visits") else tree.root_moves()
         if not entries:
@@ -211,7 +164,7 @@ def _worker(task):
     else:
         # Iteration 0 of a zero run: the weights are random and that is the point.
         net = MinihouseNet().to(device)
-    evaluator = FastEvaluator(net, device)
+    evaluator = mcts.Evaluator(net, device)
 
     shard = os.path.join(out_dir, "shard_%04d.jsonl" % wid)
     written = plies = 0

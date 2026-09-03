@@ -23,18 +23,22 @@ from utils import format_move_for_print
 class AIThread(threading.Thread):
     """The engine's own move. Single-PV, so the score costs nothing extra.
 
-    `engine` selects the backend: "alphabeta" is the search, "network" is the policy net
-    (nn/backend.py). Hints always use the search -- the network has no depth to vary and
-    no ranked lines to show.
+    `engine` selects the backend: "alphabeta" is the search at `depth`, "network" is the
+    policy-value net searched with MCTS for `net_seconds` (nn/backend.py). The two
+    budgets are different quantities and neither is a cap on the other -- a network move
+    ignores `depth` and an alpha-beta move ignores `net_seconds`. Hints always use the
+    search: the network has no depth to vary and no ranked lines to show.
     """
 
-    def __init__(self, gamestate, depth, engine="alphabeta"):
+    def __init__(self, gamestate, depth, engine="alphabeta", net_seconds=None):
         threading.Thread.__init__(self)
         self.gamestate = copy.deepcopy(gamestate)
         self.depth = depth
         self.engine = engine
+        self.net_seconds = net_seconds
         self.best_move = None
         self.score = None
+        self.simulations = 0
         self.done = False
         self.name = f"AIThread-{gamestate.current_turn}-D{depth:.0f}-Move-{time.time():.0f}"
         self.daemon = True
@@ -47,7 +51,11 @@ class AIThread(threading.Thread):
                 # user who actually selects the network -- and loaded off the UI thread,
                 # which is where the several seconds of first import belong.
                 from nn import backend
-                self.best_move, self.score = backend.find_best_move_with_score(self.gamestate)
+                self.best_move, self.score = backend.find_best_move_with_score(
+                    self.gamestate, seconds=self.net_seconds)
+                self.simulations, nodes = backend.last_search_stats()
+                print(f"AI thread {self.name}: {self.simulations} simulations, "
+                      f"{nodes} nodes in {self.net_seconds or 'default'}s")
             else:
                 self.best_move, self.score = find_best_move_with_score(self.gamestate, self.depth)
             move_str = format_move_for_print(self.best_move)

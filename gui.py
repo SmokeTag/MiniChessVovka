@@ -474,7 +474,7 @@ def _draw_header(screen, layout, view, ui):
         text = f"Thinking… {elapsed:0.1f}s" if elapsed >= 1.0 else "Thinking…"
         _text(screen, text, get_font(layout.font_size(14), bold=True), PANEL_COLORS['accent'],
               midleft=(row.x + layout.s(32), row.centery))
-        _text(screen, f"depth {ui.think_depth}", get_font(layout.font_size(12)),
+        _text(screen, ui.think_label, get_font(layout.font_size(12)),
               PANEL_COLORS['text_dim'], midright=(row.right - layout.s(10), row.centery))
     elif ui.hint_pending:
         pygame.draw.rect(screen, (52, 44, 66), row, border_radius=layout.s(6))
@@ -550,7 +550,16 @@ def _draw_controls(screen, layout, ui, hits):
            badge="NET" if net else "A-B",
            badge_color=(18, 78, 78) if net else (54, 52, 58))
 
-    button('save_book', layout.button_grid(7, 0, span=2), "Save position to book",
+    # The network's budget is a time, not a depth — one simulation costs whatever the
+    # position makes it cost, so only the clock is a promise the GUI can keep. Directly
+    # under the Engine button because it is meaningless without it, and muted rather
+    # than hidden so the ladder does not appear and disappear under the cursor.
+    _draw_stepper(screen, layout, hits, mouse, row=7, name='nettime',
+                  title=f"Network {ui.net_seconds_text}", note=ui.net_seconds_label,
+                  at_min=not ui.can_net_down, at_max=not ui.can_net_up,
+                  muted=not net)
+
+    button('save_book', layout.button_grid(8, 0, span=2), "Save position to book",
            HIGHLIGHT_COLORS['trainer'], enabled=ui.can_save_book,
            badge="IN BOOK" if ui.in_book else "SAVE",
            badge_color=(24, 84, 48) if ui.in_book else (18, 74, 74))

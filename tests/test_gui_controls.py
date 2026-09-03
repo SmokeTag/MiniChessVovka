@@ -78,6 +78,36 @@ def test_no_two_controls_share_a_region(game, size, show_hint):
                     "clicks, the one drawn last takes the pixels"
                     % (group, name_a, group, name_b, overlap))
 
+@pytest.mark.parametrize("size", [(760, 500), (1000, 640), (1100, 740), (1280, 800),
+                                  (1280, 1000), (2560, 1440)])
+@pytest.mark.parametrize("rows", [0, 1, 2, 3, 4])
+def test_panel_bands_never_paint_over_each_other(game, size, rows):
+    """The panel is a stack of bands, and the stack has to fit.
+
+    `docs/GUI.md` reserves fixed heights for the header, the controls and the toast and
+    lets only the move list flex. Adding a control row is therefore not free: at a short
+    window with four hint lines the bands wanted more panel than existed, and the move
+    list's minimum height turned "no room" into the move list and the analysis band
+    painting over the toast. Nothing failed and nothing said so — it just looked wrong.
+
+    Every band is checked against every other rather than only the pair that broke,
+    because the next row added will run out of room somewhere else.
+    """
+    from layout import Layout
+
+    frame = Layout(*size, analysis_rows=rows)
+    bands = [(name, getattr(frame, name))
+             for name in ('header', 'controls', 'analysis', 'movelist', 'toast')]
+    for i, (name_a, rect_a) in enumerate(bands):
+        for name_b, rect_b in bands[i + 1:]:
+            overlap = rect_a.clip(rect_b)
+            assert overlap.width == 0 or overlap.height == 0, (
+                "%s and %s overlap at %s in a %dx%d window with %d hint lines"
+                % (name_a, name_b, overlap, size[0], size[1], rows))
+
+    assert frame.analysis_rows <= rows, "the band grew rows nobody asked for"
+    assert frame.controls.bottom <= frame.win_h, "the controls ran off the window"
+
 def test_the_engine_toggle_is_present_and_its_own_control(game):
     g = game.Game()
     g.resize(1280, 1000)

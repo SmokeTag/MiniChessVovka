@@ -1,7 +1,7 @@
 """The network as an engine the rest of the app can play against.
 
-This is the phase-5 seam in its smallest useful form: something with the same contract
-as `ai.find_best_move_with_score` -- `(move, white_relative_score)` -- that the GUI can
+This is the phase-5 seam: something with the same contract as
+`ai.find_best_move_with_score` -- `(move, white_relative_score)` -- that the GUI can
 select instead of the alpha-beta search.
 
 **Importing this module does not import torch.** `available()` answers without it, and
@@ -10,16 +10,32 @@ the network is only loaded when a move is actually asked for, from inside the ba
 GUI's "the search never blocks the UI" invariant covers the several seconds of first
 load for a user who does.
 
-The move is a raw policy argmax over the legal actions -- no search. That is genuinely
-weak: `docs/ZERO.md` measures it beating random 0.970 but scoring ~0.1 against depth-2
-alpha-beta, because in this variant one hanging piece loses the game and a policy that is
-right half the time hangs one soon enough. Phase 3 puts MCTS on top; until then this is
-here to be played against and inspected, not to be competitive.
+**The move comes from MCTS, not from the policy head alone.** `nn/mcts.py` drives the
+Rust tree (`engine_rs/src/mcts.rs`) with this network as its leaf evaluator and the move
+is the most-visited root child. The difference is not marginal: on the same weights
+`docs/ZERO.md` measures the raw policy argmax at 0.185 against depth-2 alpha-beta and the
+tree at 0.833, because in this variant one hanging piece loses the game and search is
+what stops a policy that is right half the time from hanging one. `nn/arena.py`'s
+`PolicyPlayer` is where the searchless policy still lives, for measuring the phase-2
+criterion.
+
+**The budget is time, not simulations.** A simulation costs whatever the position makes
+it cost -- a full-hand middlegame descends further and branches wider than an opening --
+so a fixed count is not a fixed wait, and a wait is the thing an interactive caller is
+actually spending. The arena and the self-play loop keep counting simulations, which is
+what a reproducible measurement needs; see `nn.mcts.search`, which takes either.
+
+The score reported is the root's mean value, put back through the checkpoint's value
+scale. It is **not a calibrated position assessment** -- the value head carries a
+side-to-move bias from its teacher set (docs/ZERO.md) -- which is why the GUI labels the
+readout `network` rather than naming a depth.
 """
 import glob
 import math
 import os
 import threading
+
+import minichess_engine as rs
 
 from nn import paths
 
@@ -27,6 +43,21 @@ ENV_CHECKPOINT = "MINIZERO_CHECKPOINT"
 
 # atanh(1) is infinite, and the value head does reach +-1 on decided positions.
 VALUE_CLAMP = 0.999
+
+# Seconds of search per move when the caller names no budget. The GUI's ladder
+# (`settings.NET_TIME_CHOICES`) carries the same value as its default: at the ~8k
+# simulations/s this machine reaches from the opening, half a second buys a search past
+# the 2,400 that drew level with depth-6 alpha-beta (docs/ZERO.md), at about the wall
+# clock depth 6 costs.
+DEFAULT_THINK_SECONDS = 0.5
+
+# Leaves handed to the network per call. Virtual loss is what makes a batch worth more
+# than one simulation, and it is worth ~8x at 16 (800 sims: 1.08s at batch 1, 0.13s at
+# batch 16). Not raised further: the bottleneck above this size is marshalling the planes
+# across PyO3 rather than the GPU -- this is a 0.5M-parameter network -- while a wider
+# batch explores more of the tree under a loss that has not happened, which costs
+# accuracy for no speed.
+DEFAULT_BATCH = 16
 
 _lock = threading.Lock()
 _loaded = None
@@ -77,7 +108,6 @@ class _Network:
         import torch
         from nn.model import load_checkpoint
 
-        self.torch = torch
         self.path = path
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.net, self.meta = load_checkpoint(path, device=self.device)
@@ -85,6 +115,25 @@ class _Network:
         # The value head's output only means anything against the scale its targets were
         # built with, which is why the scale is stamped into the checkpoint.
         self.value_scale = float(self.meta.get("value_scale", 400.0))
+        self.evaluator = None
+        self.last_simulations = 0
+        self.last_nodes = 0
+        self._warm_up(torch)
+
+    def _warm_up(self, torch):
+        """Pay CUDA's first-call cost here rather than out of the first move's budget.
+
+        The first forward pass on a fresh device builds the context and picks kernels,
+        which took ~250ms on this machine -- an entire default think time, so the first
+        network move came back after **one** simulation and was effectively unchosen.
+        Loading already happens on the background `AIThread`, where the "search never
+        blocks the UI" invariant covers a slow start; a move does not have that excuse.
+        """
+        shape = (1, rs.ENCODE_PLANES, rs.BOARD_SIZE, rs.BOARD_SIZE)
+        with torch.inference_mode():
+            self.net(torch.zeros(shape, dtype=torch.float32, device=self.device))
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
 
     def label(self):
         top1 = self.meta.get("metrics", {}).get("top1")
@@ -93,27 +142,36 @@ class _Network:
             return "network · %s" % run
         return "network · %s · top1 %.0f%%" % (run, 100 * top1)
 
-    def best_move(self, gamestate):
+    def best_move(self, gamestate, seconds=None, simulations=None, batch=None):
+        """MCTS from this position: `(move, white_relative_score)`.
+
+        `seconds` and `simulations` are both optional and both may be given, in which
+        case the search stops at whichever comes first; with neither, it searches for
+        `DEFAULT_THINK_SECONDS`.
+        """
         import ai
-        import minichess_engine as rs
-        from nn import features
+        from nn import mcts
+
+        if seconds is None and simulations is None:
+            seconds = DEFAULT_THINK_SECONDS
+        if self.evaluator is None:
+            self.evaluator = mcts.Evaluator(self.net, self.device)
 
         synced = ai._sync_to_rust(gamestate)
-        indices = rs.legal_action_indices(synced)
-        if not indices:
+        tree = mcts.search(synced, self.evaluator, simulations=simulations,
+                           batch=batch or DEFAULT_BATCH, time_limit=seconds)
+        self.last_simulations = tree.simulations
+        self.last_nodes = tree.nodes
+
+        move = tree.best_move()
+        if move is None:
             return None, None
-
-        x = self.torch.from_numpy(features.encode(synced)).unsqueeze(0).to(self.device)
-        with self.torch.inference_mode():
-            logits, value = self.net(x)
-        logits = logits.float().squeeze(0)
-
-        best = max(indices, key=lambda i: logits[i].item())
-        move = rs.action_index_to_move(synced, best)
         # Promotion case encodes colour and the two generators pick it differently;
         # ai._normalize_promotion is the single reconciliation point (CLAUDE.md).
         move = ai._normalize_promotion(move, gamestate.current_turn)
-        return move, self._centipawns(float(value.item()), gamestate.current_turn)
+        # The root's mean value is in the frame of the side to move there, exactly like
+        # the value head's own output, so it takes the same flip into white-relative.
+        return move, self._centipawns(float(tree.value), gamestate.current_turn)
 
     def _centipawns(self, value, turn):
         """Value head -> the white-relative centipawns everything else in the app speaks.
@@ -149,11 +207,20 @@ def describe():
     except Exception as exc:
         return "network unavailable — %s" % exc
 
-def find_best_move_with_score(gamestate, depth=None):
-    """Same contract as `ai.find_best_move_with_score`. `depth` is accepted and ignored:
-    a raw policy has no depth, and the caller should not have to care which engine it
-    is talking to."""
-    return load().best_move(gamestate)
+def find_best_move_with_score(gamestate, depth=None, seconds=None, simulations=None):
+    """Same contract as `ai.find_best_move_with_score`.
 
-def find_best_move(gamestate, depth=None):
-    return load().best_move(gamestate)[0]
+    `depth` is accepted and ignored so the caller does not have to know which engine it
+    is talking to: an MCTS budget is time or simulations, and there is no depth to set.
+    """
+    return load().best_move(gamestate, seconds=seconds, simulations=simulations)
+
+def find_best_move(gamestate, depth=None, seconds=None, simulations=None):
+    return find_best_move_with_score(gamestate, seconds=seconds,
+                                     simulations=simulations)[0]
+
+def last_search_stats():
+    """(simulations, nodes) from the most recent search, or (0, 0). For a readout that
+    says what the time budget actually bought."""
+    net = _loaded
+    return (net.last_simulations, net.last_nodes) if net else (0, 0)

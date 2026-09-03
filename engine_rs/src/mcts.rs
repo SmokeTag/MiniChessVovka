@@ -18,6 +18,14 @@
 //!
 //! **Values are always in the frame of the side to move at that node**, matching the
 //! network's own convention, so `backup` flips sign at every step up the path.
+//!
+//! **A tree outlives the move it chose.** `advance_to` re-roots onto the position that
+//! was actually reached -- the subtree under the move played is already the right tree
+//! for it -- so the next search starts with those visits banked instead of an empty
+//! root. It matches by position rather than by move so a caller does not have to tell
+//! the tree what was played, and it looks two plies down so the opponent's reply is
+//! found too. Everything unreachable from the new root is dropped, which is what keeps
+//! the flat `Vec`s from growing without bound over a game.
 
 use crate::encode;
 use crate::gamestate::GameState;
@@ -359,6 +367,167 @@ impl Mcts {
             self.backup(&leaf.path, values[i]);
         }
         Ok(())
+    }
+
+    pub fn root_expanded(&self) -> bool {
+        self.nodes[0].expanded
+    }
+
+    /// Visits standing at the root, whether from this search or banked by `advance_to`.
+    /// `simulations()` counts only the ones this search paid for.
+    pub fn root_total_visits(&self) -> u32 {
+        self.nodes[0].visits
+    }
+
+    /// The root's priors, in the order `root_moves` reports them.
+    pub fn root_priors(&self) -> Vec<f32> {
+        let root = &self.nodes[0];
+        (root.edge_start..root.edge_start + root.edge_len)
+            .map(|i| self.edges[i as usize].prior)
+            .collect()
+    }
+
+    /// Replace the root's priors, renormalising over them. This is where self-play mixes
+    /// in its Dirichlet noise: on a fresh tree the alternative is to perturb the one
+    /// evaluator call that sets them, which stops working the moment the root arrives
+    /// already expanded from the previous move's tree.
+    pub fn set_root_priors(&mut self, priors: &[f32]) -> Result<(), String> {
+        let (start, len) = {
+            let root = &self.nodes[0];
+            (root.edge_start as usize, root.edge_len as usize)
+        };
+        if priors.len() != len {
+            return Err(format!(
+                "set_root_priors got {} priors for {} root moves",
+                priors.len(),
+                len
+            ));
+        }
+        let total: f32 = priors.iter().map(|p| p.max(0.0)).sum();
+        for (e, p) in self.edges[start..start + len].iter_mut().zip(priors) {
+            e.prior = if total > 1e-8 { p.max(0.0) / total } else { 1.0 / len as f32 };
+        }
+        Ok(())
+    }
+
+    /// Abandon the leaves waiting on the network. Re-rooting between searches must not
+    /// carry a `pending` flag or a virtual loss into the tree it keeps -- both would
+    /// then never be cleared, and a node marked pending forever is a node no descent
+    /// can ever pass through.
+    fn drop_pending(&mut self) {
+        let batch: Vec<Pending> = std::mem::take(&mut self.pending);
+        for leaf in batch {
+            self.nodes[leaf.node as usize].pending = false;
+            self.clear_virtual_loss(&leaf.path);
+        }
+    }
+
+    /// The node reached by playing `path` from the root, if some line of at most
+    /// `max_depth` plies arrives at `target`. `self.scratch` is left at the root either
+    /// way.
+    fn find_target(&mut self, node: u32, depth: usize, max_depth: usize,
+                   target: &GameState, path: &mut Vec<Move>) -> Option<u32> {
+        // Hash and ply together: the hash carries the position (board, side, hands,
+        // promotions) and nothing path-dependent, so a tree rooted at the same position
+        // reached at a different ply would disagree with the caller about the ply limit.
+        if self.scratch.hash == target.hash && self.scratch.ply == target.ply {
+            return Some(node);
+        }
+        if depth >= max_depth {
+            return None;
+        }
+        let n = &self.nodes[node as usize];
+        let (start, len) = (n.edge_start, n.edge_len);
+        for i in start..start + len {
+            let edge = self.edges[i as usize];
+            if edge.child == NO_NODE {
+                continue;
+            }
+            self.scratch.make_ai_move(edge.mv);
+            path.push(edge.mv);
+            let found = self.find_target(edge.child, depth + 1, max_depth, target, path);
+            self.scratch.undo_ai_move();
+            if found.is_some() {
+                return found;
+            }
+            path.pop();
+        }
+        None
+    }
+
+    /// Keep the subtree under `new_root` and renumber it into fresh flat `Vec`s.
+    fn rebase(&mut self, new_root: u32) {
+        let mut map = vec![NO_NODE; self.nodes.len()];
+        let mut order = vec![new_root];
+        map[new_root as usize] = 0;
+        let mut i = 0;
+        while i < order.len() {
+            let old = order[i] as usize;
+            i += 1;
+            let n = &self.nodes[old];
+            for k in n.edge_start..n.edge_start + n.edge_len {
+                let c = self.edges[k as usize].child;
+                if c != NO_NODE && map[c as usize] == NO_NODE {
+                    map[c as usize] = order.len() as u32;
+                    order.push(c);
+                }
+            }
+        }
+
+        let mut nodes = Vec::with_capacity(order.len());
+        let mut edges = Vec::with_capacity(self.edges.len());
+        for &old in &order {
+            let n = &self.nodes[old as usize];
+            let start = edges.len() as u32;
+            for k in n.edge_start..n.edge_start + n.edge_len {
+                let e = self.edges[k as usize];
+                let child = if e.child == NO_NODE { NO_NODE } else { map[e.child as usize] };
+                edges.push(Edge { action: e.action, mv: e.mv, prior: e.prior, child });
+            }
+            nodes.push(Node {
+                edge_start: start,
+                edge_len: n.edge_len,
+                visits: n.visits,
+                value_sum: n.value_sum,
+                // Nothing is in flight: `drop_pending` ran before the walk.
+                virtual_loss: 0,
+                expanded: n.expanded,
+                pending: false,
+                terminal: n.terminal,
+            });
+        }
+        self.nodes = nodes;
+        self.edges = edges;
+    }
+
+    /// Re-root onto `target` if it lies at most `max_depth` plies below the current
+    /// root, keeping that subtree's statistics. Returns how many plies were skipped, or
+    /// `None` when the position is not in the tree and the caller must start a new one.
+    ///
+    /// A retained node's stored verdict stays correct across this: `terminal_value`
+    /// reads only the rules (`is_terminal_draw`, which counts repetitions over the whole
+    /// history), never the search's own root-relative draw rule, so moving the root down
+    /// cannot change an answer already recorded. The new root's history *root* is pinned
+    /// again, exactly as `new` does it, so a repetition inside the next search is scored
+    /// against the position actually on the board.
+    pub fn advance_to(&mut self, target: &GameState, max_depth: usize) -> Option<usize> {
+        self.drop_pending();
+        let mut path = Vec::new();
+        let found = self.find_target(0, 0, max_depth, target, &mut path)?;
+        if path.is_empty() {
+            return Some(0);
+        }
+        for &mv in &path {
+            self.root.make_ai_move(mv);
+        }
+        self.root.set_search_root();
+        self.scratch = self.root.clone();
+        self.rebase(found);
+        // The budget the caller sets is work this search does, not work it inherited:
+        // "400 simulations" has to mean the same thing on the first move of a game as on
+        // the fortieth, or a measurement stops being one. `root_visits()` is the total.
+        self.simulations = 0;
+        Some(path.len())
     }
 
     /// (action index, visit count, mean value) for every root move, best first.

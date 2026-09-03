@@ -26,6 +26,9 @@ follows from them:
 | 4 | self-play loop | three consecutive gate passes against the previous best |
 | 5 | integration behind `ai.find_best_move` | GUI and bot play through the network |
 
+Phase 5 is half done: the GUI plays the network with MCTS behind it; the chess.com bot
+still always uses the alpha-beta search.
+
 Phases 0 and 1 are done; `docs/ENCODING.md` owns phase 1. This page owns phase 2 on.
 
 ## Dependencies
@@ -367,15 +370,36 @@ The gate should be restated in time rather than simulations. "800 sims" was a gu
 budget made before anything could be measured; the thing worth gating on is what the
 scoping doc actually asked for.
 
-## Playing it: the phase-5 seam, early
+## Playing it: the phase-5 seam
 
 `nn/backend.py` gives the network the same contract as `ai.find_best_move_with_score` --
-`(move, white_relative_score)` -- and the GUI's **Engine** button selects it. That is
-phase 5 in its smallest form, landed early because being able to sit down and play the
-thing is worth more than its ordering in the plan. What it is not yet: the chess.com bot
-still always uses the search, and there is no MCTS behind it.
+`(move, white_relative_score)` -- and the GUI's **Engine** button selects it. It searches:
+`nn/mcts.py` drives the Rust tree with the network as its leaf evaluator and plays the
+most-visited root move, which is the difference between the 0.185 and the 0.833 in the
+table above. What it is not yet: the chess.com bot still always uses the search.
 
-See `docs/GUI.md` for the control and the invariants it has to respect -- chiefly that
+**The GUI's budget is a time, not a simulation count.** A simulation costs whatever the
+position makes it cost, so a fixed count is not a fixed wait -- and the wait is what an
+interactive user spends. It is also the unit this project's success bar is stated in, and
+the reason the phase-3 gate was restated in time above. `nn.mcts.search` therefore takes
+`simulations`, `time_limit`, or both and stops at the first to bind: the arena and the
+self-play loop keep counting simulations, because a measurement wants reproducibility
+rather than a clock. The GUI's ladder is 0.1s to 5s with a 0.5s default, which is about
+4,000 simulations at the opening on this machine -- a little past the 2,400 that drew
+level with depth-6 alpha-beta, at about the wall clock depth 6 costs.
+
+The score the GUI shows is the root's mean value rather than a single forward pass, but
+the side-to-move bias measured above is a property of the weights and the tree averages
+it rather than removing it. It is still not a position assessment.
+
+**Tree reuse across moves is not implemented** and is worth roughly 2x. `rs.Mcts` only
+takes a starting position, so re-rooting onto the subtree under the move actually played
+needs a Rust change as well as a tree that survives between the GUI's per-move threads.
+
+`nn/arena.py`'s `PolicyPlayer` is where the searchless policy still lives, since the
+phase-2 criterion is a claim about the policy head alone.
+
+See `docs/GUI.md` for the controls and the invariants they have to respect -- chiefly that
 importing the GUI must not import torch, which is checked in a subprocess.
 
 ## Risks still live

@@ -79,22 +79,36 @@ class Layout:
         header_h = self.s(26) + self.s(34) + eval_h + self.s(30) + 4 * self.s(6)
         self.header = pygame.Rect(inner_x, pad, inner_w, header_h)
 
-        controls_h = 8 * btn_h + 7 * btn_gap
+        controls_h = 9 * btn_h + 8 * btn_gap
         self.controls = pygame.Rect(inner_x, self.header.bottom + self.s(10), inner_w, controls_h)
-
-        self.analysis_rows = max(0, int(analysis_rows))
-        self.analysis_row_h = self.s(22)
-        analysis_h = (self.s(22) + self.analysis_rows * self.analysis_row_h + self.s(8)
-                      if self.analysis_rows else 0)
-        self.analysis = pygame.Rect(inner_x, self.controls.bottom + self.s(10),
-                                    inner_w, analysis_h)
 
         self.toast_h = toast_h = self.s(46)
         self.toast = pygame.Rect(inner_x, win_h - pad - toast_h, inner_w, toast_h)
 
+        # The analysis band is sized from a *setting*, so it cannot resize mid-search —
+        # but on a short window the reserved bands can want more panel than exists, and
+        # then it has to give way rather than paint over the toast. It shows as many of
+        # the requested rows as fit; `gui._draw_analysis` bounds its row loop by this
+        # count, so a clamp here cannot leave a row drawn outside the band.
+        analysis_head, analysis_foot = self.s(22), self.s(8)
+        self.analysis_row_h = self.s(22)
+        analysis_top = self.controls.bottom + self.s(10)
+        room = (self.toast.top - self.s(10)) - analysis_top - analysis_head - analysis_foot
+        self.analysis_rows = max(0, min(int(analysis_rows),
+                                        room // self.analysis_row_h if room > 0 else 0))
+        analysis_h = (analysis_head + self.analysis_rows * self.analysis_row_h + analysis_foot
+                      if self.analysis_rows else 0)
+        self.analysis = pygame.Rect(inner_x, analysis_top, inner_w, analysis_h)
+
+        # The move list is the only zone that flexes, so it takes whatever the fixed
+        # bands leave and **collapses** when that is nothing. A minimum height here
+        # instead would push it over the toast: a tall controls grid, four hint lines
+        # and a short window is enough to run out of panel, and a floor turns "no room"
+        # into two zones painting the same pixels. `gui._draw_movelist` already returns
+        # early on a body with no height.
         list_top = (self.analysis.bottom if analysis_h else self.controls.bottom) + self.s(10)
         self.movelist = pygame.Rect(inner_x, list_top, inner_w,
-                                    max(self.s(40), self.toast.top - self.s(10) - list_top))
+                                    max(0, self.toast.top - self.s(10) - list_top))
         self.movelist_row_h = self.s(21)
 
     def s(self, value):

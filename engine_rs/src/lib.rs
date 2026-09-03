@@ -9,7 +9,8 @@ mod encode;
 mod mcts;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PyTuple, PyDict};
+use pyo3::buffer::PyBuffer;
+use pyo3::types::{PyByteArray, PyList, PyTuple, PyDict};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 
 use std::collections::HashMap;
@@ -877,6 +878,23 @@ fn legal_action_indices(gs: &mut PyGameState) -> Vec<usize> {
     encode::legal_action_indices(&mut gs.inner)
 }
 
+/// A `&[f32]` seen as the bytes behind it, for handing a batch to numpy in one copy.
+/// Sound for any `f32`: every bit pattern is a valid `u8` and `u8`'s alignment is 1.
+fn f32_as_bytes(v: &[f32]) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
+}
+
+/// float32 out of anything that will give it: a contiguous buffer in one copy, else the
+/// sequence protocol one element at a time.
+fn extract_f32(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
+    if let Ok(buf) = PyBuffer::<f32>::get(obj) {
+        if let Ok(v) = buf.to_vec(obj.py()) {
+            return Ok(v);
+        }
+    }
+    obj.extract::<Vec<f32>>()
+}
+
 #[pyclass(name = "Mcts", unsendable)]
 struct PyMcts {
     inner: mcts::Mcts,
@@ -895,18 +913,66 @@ impl PyMcts {
     }
 
     /// Descend until `max_leaves` positions need the network, resolving terminals in
-    /// place. Returns their planes flat, `max_leaves * ENCODE_INPUT_SIZE` at most;
-    /// empty means the tree could not produce new work and the search is finished.
-    fn collect(&mut self, py: Python<'_>, max_leaves: usize) -> Vec<f32> {
-        py.allow_threads(|| self.inner.collect(max_leaves))
+    /// place. Returns their planes as **raw little-endian f32 bytes** --
+    /// `4 * ENCODE_INPUT_SIZE` per leaf, `max_leaves` leaves at most -- for
+    /// `np.frombuffer(..., dtype=np.float32)`. Empty means the tree could not produce
+    /// new work and the search is finished.
+    ///
+    /// Bytes rather than a list because this is the hot path: a list of 110k floats is
+    /// 110k boxed, refcounted `PyObject`s built here and walked again by numpy, which
+    /// measured as most of a self-play ply against ~3ms of GPU (docs/ZERO.md). A
+    /// bytearray is one allocation and one memcpy, and numpy wraps it without copying.
+    /// Mutable rather than `bytes` so `torch.from_numpy` does not warn about a
+    /// read-only buffer on every batch.
+    fn collect<'py>(&mut self, py: Python<'py>, max_leaves: usize) -> Bound<'py, PyByteArray> {
+        let planes = py.allow_threads(|| self.inner.collect(max_leaves));
+        PyByteArray::new(py, f32_as_bytes(&planes))
     }
 
     /// Answer the last `collect`. `priors` is one masked, normalised row of ACTION_SPACE
     /// per leaf; `values` one scalar per leaf, in that leaf's own frame.
-    fn expand(&mut self, py: Python<'_>, priors: Vec<f32>, values: Vec<f32>) -> PyResult<()> {
+    ///
+    /// Both come in through the buffer protocol when the caller hands over a contiguous
+    /// float32 array -- one memcpy for the whole batch -- and fall back to element-wise
+    /// extraction for a plain Python sequence, which is what the tests use.
+    fn expand(&mut self, py: Python<'_>, priors: &Bound<'_, PyAny>,
+              values: &Bound<'_, PyAny>) -> PyResult<()> {
+        let priors = extract_f32(priors)?;
+        let values = extract_f32(values)?;
         py.allow_threads(|| self.inner.expand(&priors, &values))
             .map_err(PyValueError::new_err)
     }
+
+    /// Re-root onto `gs` if the position is at most `max_depth` plies below this tree's
+    /// root, keeping the statistics already gathered there; returns the number of plies
+    /// skipped, or None when the tree cannot reach it and the caller needs a new one.
+    ///
+    /// Matching is by position, not by move: the caller does not have to report what was
+    /// played, and two plies of lookahead cover an opponent's reply as well as our own
+    /// move. `simulations` restarts at 0 -- it counts what this search does, and
+    /// `root_total_visits` is what it inherited.
+    #[pyo3(signature = (gs, max_depth=2))]
+    fn advance_to(&mut self, gs: &PyGameState, max_depth: usize) -> Option<usize> {
+        self.inner.advance_to(&gs.inner, max_depth)
+    }
+
+    /// The root's priors in `root_visits()` order, and their replacement. Self-play mixes
+    /// Dirichlet noise here rather than into the evaluator's answer, because a reused
+    /// tree arrives with its root already expanded.
+    fn root_priors(&self) -> Vec<f32> { self.inner.root_priors() }
+
+    fn set_root_priors(&mut self, priors: &Bound<'_, PyAny>) -> PyResult<()> {
+        let p = extract_f32(priors)?;
+        self.inner.set_root_priors(&p).map_err(PyValueError::new_err)
+    }
+
+    #[getter]
+    fn root_expanded(&self) -> bool { self.inner.root_expanded() }
+
+    /// Visits standing at the root, banked ones included. `simulations` is what this
+    /// search paid for; the difference is what tree reuse saved.
+    #[getter]
+    fn root_total_visits(&self) -> u32 { self.inner.root_total_visits() }
 
     #[getter]
     fn simulations(&self) -> usize { self.inner.simulations() }
