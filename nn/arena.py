@@ -141,22 +141,29 @@ class MctsPlayer:
     This is what phase 3 exists to produce, and the difference from `PolicyPlayer` is
     the whole point of the phase -- the same weights, asked the same question, with a
     search between them and the board.
+
+    The tree is carried across the moves of a game (`nn.mcts.Searcher`), so the root
+    starts each move with the subtree under the move played already visited. Read a
+    result with that in mind: `simulations` is what each move newly spends, not what its
+    root ends up standing at, and the wall clock `timed_move` charges is the honest
+    comparison against a fixed-depth opponent.
     """
 
     def __init__(self, net, device, simulations=800, batch=16, c_puct=None,
-                 name=None):
+                 name=None, reuse=True):
         from nn import mcts as mcts_mod
-        self.mcts = mcts_mod
         self.evaluator = mcts_mod.Evaluator(net, device)
         self.simulations = simulations
-        self.batch = batch
-        self.c_puct = c_puct or mcts_mod.DEFAULT_C_PUCT
         self.name = name or "mcts-%d" % simulations
+        self.searcher = mcts_mod.Searcher(
+            self.evaluator, simulations=simulations, batch=batch,
+            c_puct=c_puct or mcts_mod.DEFAULT_C_PUCT, reuse=reuse)
+
+    def new_game(self):
+        self.searcher.reset()
 
     def move(self, gs, legal):
-        tree = self.mcts.search(ai._sync_to_rust(gs), self.evaluator,
-                                simulations=self.simulations, batch=self.batch,
-                                c_puct=self.c_puct)
+        tree = self.searcher.search(ai._sync_to_rust(gs))
         move = tree.best_move()
         if move is None:
             return None
@@ -208,6 +215,12 @@ def timed_move(player, gs, legal):
 
 def play_game(white, black, opening, ply_cap=200):
     """Returns (result_for_white, plies, reason). Illegal choices forfeit, loudly."""
+    for p in (white, black):
+        # A player that carries a tree between moves must not carry one between games.
+        # Reuse is keyed on the position and would rebuild anyway; this is about not
+        # holding a finished game's nodes for the length of a match.
+        getattr(p, "new_game", lambda: None)()
+
     gs = GameState()
     gs.setup_initial_board()
     gs.ply_limit = ply_cap
@@ -319,7 +332,7 @@ def build_subject(args):
           % (path, meta.get("epoch"), meta.get("metrics", {}).get("top1", float("nan"))))
     if args.sims:
         return MctsPlayer(net, device, simulations=args.sims, batch=args.batch,
-                          c_puct=args.c_puct)
+                          c_puct=args.c_puct, reuse=not args.no_reuse)
     if args.lookahead:
         return ValueLookaheadPlayer(net, device, name="value1ply@%s" % os.path.basename(path))
     return PolicyPlayer(net, device, name="policy@%s" % os.path.basename(path))
@@ -342,6 +355,10 @@ def main():
     ap.add_argument("--batch", type=int, default=16,
                     help="leaves collected per network call (virtual loss fills the batch)")
     ap.add_argument("--c-puct", type=float, default=None)
+    ap.add_argument("--no-reuse", action="store_true",
+                    help="rebuild the tree every move instead of re-rooting it. The "
+                         "ablation for tree reuse: same simulation budget, a root that "
+                         "starts empty, and the ms/move to compare it against")
     ap.add_argument("--lookahead", action="store_true",
                     help="one ply of value-head search instead of raw policy argmax. "
                          "Diagnostic only -- the phase-2 criterion is the raw policy")

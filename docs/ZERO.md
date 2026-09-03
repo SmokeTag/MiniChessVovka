@@ -306,10 +306,10 @@ partition function. There is no masking step to get wrong.
 **Values are in the frame of the side to move at each node**, matching the network's own
 convention, so `backup` flips sign at every step up the path.
 
-### Two bugs worth keeping in mind
+### Three bugs worth keeping in mind
 
-Both were found by `tests/test_mcts.py` before any strength was measured, and both are
-the kind that produce a plausible-looking search rather than a crash.
+All three are the kind that produce a plausible-looking search rather than a crash; the
+first two were found by `tests/test_mcts.py` before any strength was measured.
 
 - **The root needs a terminal verdict like any other node.** Only child nodes got one
   during a descent, so a search started from a finished game expanded a node with no
@@ -318,7 +318,15 @@ the kind that produce a plausible-looking search rather than a crash.
   position backs up *without* adding to the batch, so `pending.len() < max_leaves` never
   advances when every reachable leaf is terminal -- an infinite loop. `collect` is now
   bounded per call, and the driver stops only when a collect yields no leaves **and** the
-  simulation count did not move.
+  tree did not grow.
+- **"No simulation happened" was the wrong stop condition.** It was the condition until a
+  won position under a GUI time budget reported **528,672 simulations on a 254-node
+  tree**: every reachable leaf was an already-resolved terminal, so each pass backed one
+  up, incremented the count, and learnt nothing, for the whole half second. New *nodes*
+  are the evidence that the search is still finding something, and while unexplored
+  terminal children remain the node count still climbs -- so the node test stops later
+  than the simulation test would, not sooner. Under a simulation budget the bug was
+  invisible; only the clock exposed it.
 
 ### Testing a search rather than a network
 
@@ -370,6 +378,119 @@ The gate should be restated in time rather than simulations. "800 sims" was a gu
 budget made before anything could be measured; the thing worth gating on is what the
 scoping doc actually asked for.
 
+## Making a simulation cheap
+
+Two changes after the first from-scratch run (`zero1`), in the order they had to happen:
+the boundary first, because everything downstream of it gets faster at once, and tree
+reuse second, because it multiplies whatever a simulation already costs.
+
+### The boundary, not the GPU
+
+Profiling one self-play worker at 400 simulations found **the network forward pass was
+~3 ms of an 80 ms ply**. Nearly all the rest was `collect` and `expand` marshalling
+Python lists across PyO3: `collect` handed back ~110k floats and `expand` took ~281k
+back, every one of them a separately allocated, refcounted `PyObject` built on one side
+and walked on the other. The network itself is flat at 0.77 ms a call from batch 1 to
+batch 256 -- this is a 0.5M-parameter network on a GPU that is barely awake -- so the
+whole cost of a batch lived in its packaging.
+
+Both directions now use the buffer protocol.
+
+- `collect` returns **raw little-endian f32 bytes** as a `bytearray`, which
+  `np.frombuffer` wraps with no copy at all. A `bytearray` rather than `bytes` so
+  `torch.from_numpy` does not warn about a read-only buffer on every batch.
+- `expand` takes anything exposing a contiguous float32 buffer -- one memcpy for the
+  whole batch -- and falls back to element-wise extraction for a plain sequence, which
+  is what `tests/test_mcts.py` hands it.
+
+Every evaluator therefore speaks numpy in and numpy out. `nn.mcts.Evaluator` is now the
+only one; `selfplay.FastEvaluator`, which existed to do `np.fromiter` on the list and
+`.tolist()` on the way back, has nothing left to work around.
+
+The counter-intuitive half of the old measurement is gone with it. Passing a numpy array
+to the *old* `expand` was **slower** than passing a list, because PyO3 extracted
+`Vec<f32>` from it through the sequence protocol one element at a time; the fast path was
+`fromiter` in and `.tolist()` out. With a real buffer on the Rust side that reverses, and
+the array is now strictly the fast way in.
+
+### Tree reuse across moves
+
+MCTS spends a whole budget building a tree of positions with visit counts and values
+attached, and then throws it away. The subtree under the move actually played **is** the
+correct tree for the position that follows -- those statistics are still valid -- so
+`Mcts::advance_to` keeps it, drops everything else, and renumbers the survivors into
+fresh flat `Vec`s. `nn.mcts.Searcher` is the Python side: one tree for the moves of one
+game.
+
+Four decisions in it that the code alone does not explain:
+
+- **It matches on the position, not on a move the caller reports.** `advance_to(gs,
+  depth)` walks up to `depth` plies down from the current root looking for `gs`'s hash
+  *and* ply, and returns None when it cannot find it. That makes every misuse a rebuild
+  rather than a wrong answer -- a new game, a takeback, a position pasted into an
+  analysis board -- and it means the GUI, whose per-move thread has no notion of "a
+  game", needs no bookkeeping to use it. The default depth is 2: our move and the
+  opponent's reply. The search for it is **shallowest-first**, because two lines can
+  transpose into the same position and the one the game actually played is the shorter;
+  taking the depth-2 transposition over the depth-1 child would leave the kept tree with
+  a history through moves nobody made.
+- **Two things touch the root specifically and both are re-applied, not inherited.**
+  `set_search_root()` pins where the game's history stops and the tree's begins, and is
+  called again on the new root; self-play's Dirichlet noise now goes in through
+  `set_root_priors` at a `root_hook` that fires the moment the root is expanded, because
+  a reused root arrives **already expanded** and there is no first evaluator call left to
+  intercept.
+- **A retained verdict stays correct.** `terminal_value` reads only the rules --
+  `is_terminal_draw`, which counts repetitions over the whole history -- and never the
+  search's own root-relative draw rule, so moving the root down cannot change an answer
+  already recorded. This is the one place where phase 0's insistence that
+  `is_terminal_draw()` and `search_draw()` are different questions pays off.
+- **The budget counts new simulations.** `tree.simulations` restarts at 0 on a
+  re-rooting and `tree.root_total_visits` is what the root actually stands at. "400
+  simulations" then means the same thing on the first move of a game as on the fortieth,
+  which is what a measurement needs; the alternative -- counting inherited visits against
+  the budget -- would silently turn reuse into a way of doing less work rather than more
+  search.
+
+Pending leaves are dropped before re-rooting. A leaf still waiting on the network carries
+a `pending` flag and a virtual loss along its whole path; carried into the tree that is
+kept, the flag is never cleared and no descent can pass through that node again -- a
+search that quietly stops growing rather than one that fails.
+
+### What the two bought
+
+One self-play worker, 400 simulations a move, batch 128, median of three runs, all three
+rows measured in the same sitting -- the machine drifts by ~15% over an afternoon and the
+first version of this table compared numbers taken an hour apart:
+
+| | plies/s | ms/ply | vs before |
+| --- | --- | --- | --- |
+| before | 29.3 | 34.2 | — |
+| buffer protocol only | 94.9 | 10.5 | 3.2x |
+| **+ tree reuse** | **177.4** | **5.6** | **6.1x** |
+
+Opening search throughput went ~10k -> ~46k simulations/s at batch 128. Part of reuse's
+share is not extra search at all but a better-filled batch: a fresh tree's first
+`collect` can only return the root, and at batch 128 those early undersized calls are
+most of a 400-simulation search, while a re-rooted tree fills it from the first call.
+
+Reuse leaves the root standing at roughly 700-1,400 visits for a 400-simulation budget in
+the opening -- **2-3.5x the effective simulations**, for less wall clock rather than more.
+
+Whether that is also *strength* is a separate question, and the answer is "probably, but
+not provably at this sample size". Bootstrap net, 400 simulations, 600 games against
+depth-2 alpha-beta, ablated with `nn.arena --no-reuse`:
+
+| | score | ms/move |
+| --- | --- | --- |
+| tree rebuilt every move | 0.586 +/- 0.020 (+334 =35 -231) | 9 |
+| tree re-rooted | 0.617 +/- 0.020 (+355 =30 -215) | 8 |
+
+The 0.031 gap is about one standard error of the difference: directionally right, and the
+sort of thing 600 games cannot settle. What the run does settle is that the same
+simulation budget now costs less wall clock and the search is no weaker, which is the
+whole claim the ordering of these steps rested on.
+
 ## Playing it: the phase-5 seam
 
 `nn/backend.py` gives the network the same contract as `ai.find_best_move_with_score` --
@@ -392,9 +513,11 @@ The score the GUI shows is the root's mean value rather than a single forward pa
 the side-to-move bias measured above is a property of the weights and the tree averages
 it rather than removing it. It is still not a position assessment.
 
-**Tree reuse across moves is not implemented** and is worth roughly 2x. `rs.Mcts` only
-takes a starting position, so re-rooting onto the subtree under the move actually played
-needs a Rust change as well as a tree that survives between the GUI's per-move threads.
+**The GUI reuses its tree too.** `_Network` holds one `nn.mcts.Searcher` across moves, and
+because reuse is keyed on the position rather than on a move it was told about, a new
+game or a takeback simply fails to match and starts a fresh tree -- the GUI needs no
+signal into the backend. The readout still reports the simulations this move paid for,
+not the visits it inherited; see "Making a simulation cheap" above.
 
 `nn/arena.py`'s `PolicyPlayer` is where the searchless policy still lives, since the
 phase-2 criterion is a claim about the policy head alone.

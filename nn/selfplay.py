@@ -27,7 +27,10 @@ calls the hook at the one moment both cases share.
 the move just played is the right tree for the position that follows, so the next search
 starts with those visits banked. The `--sims` budget still counts new simulations, which
 keeps a number comparable across runs; `tree.root_total_visits` is where the root actually
-ended up.
+ended up. The policy target is the visit distribution *including* what was banked -- the
+banked visits are simulations of this same position by this same network, so a record
+written after a re-rooting carries a sharper target than the budget alone would buy,
+which is the point of doing it.
 
 Records reuse `teacher.restore`'s field names (fen/ply/ply_limit/reps) so the same
 position-not-encoding indirection applies: a plane-layout change costs a re-encode, not a

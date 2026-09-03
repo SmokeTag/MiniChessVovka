@@ -155,8 +155,15 @@ setting the user can see is the one that runs — but it counts seconds rather t
 - **The deadline is read between batches**, so a move can overrun it by one network call
   — a few milliseconds at the batch of 16 `nn.backend.DEFAULT_BATCH` fixes. The batch is
   not user-facing: it is a throughput knob whose value (~8x, from virtual loss) is
-  measured in `docs/ZERO.md`, and above 16 the cost is marshalling planes across PyO3
-  rather than GPU time.
+  measured in `docs/ZERO.md`.
+- **The tree survives between moves.** `nn.backend._Network` holds one
+  `nn.mcts.Searcher`, so a move starts from the subtree under the move actually played
+  rather than from an empty root — the same second of thinking buys a root standing at
+  two to three times the visits. It needs no signal from the GUI: reuse is keyed on the
+  **position**, so a new game, an undo, or any position the tree cannot reach in two
+  plies simply starts a fresh tree. The thinking row still reports the simulations *this*
+  move paid for, not the ones it inherited, because that is what the second actually
+  bought.
 - **It is muted, not hidden, while the alpha-beta engine is selected**, the same way the
   hint steppers mute when hints are off — a ladder that appears and disappears moves the
   buttons under the cursor. Changing it while the search is alpha-beta toasts that it

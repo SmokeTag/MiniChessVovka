@@ -86,6 +86,8 @@ def _eval_worker(task):
 
     net, _ = load_checkpoint(ckpt, device=device)
     ev = mcts.Evaluator(net, device)
+    # One tree per ladder game, re-rooted past our move and the opponent's reply.
+    searcher = mcts.Searcher(ev, simulations=sims, batch=64)
     wins = draws = losses = 0
 
     for g in game_ids:
@@ -95,6 +97,7 @@ def _eval_worker(task):
         # A few temperature-sampled opening plies from the network, plus a distinct
         # move-ordering seed for the opponent, is what makes N games worth N games.
         rs.set_search_knobs({"use_book": False, "order_seed": int(seed + g)})
+        searcher.reset()
         gs = rs.GameState()
         gs.setup_initial_board()
         net_is_white = (g % 2 == 0)
@@ -105,7 +108,7 @@ def _eval_worker(task):
             if not moves:
                 break
             if (gs.current_turn == "w") == net_is_white:
-                tree = mcts.search(gs, ev, simulations=sims, batch=64)
+                tree = searcher.search(gs)
                 if gs.ply < opening_plies:
                     entries = tree.root_visits()
                     if not entries:

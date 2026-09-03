@@ -193,7 +193,7 @@ different one: otherwise a plane-layout change loads cleanly and plays nonsense.
 **MCTS lives in Rust, the batch loop in Python** (`engine_rs/src/mcts.rs`, `nn/mcts.py`).
 Rust descends until it has a batch of leaves needing evaluation, hands their planes across
 one call, and takes back priors and values; Rust threads calling *into* torch would
-serialise on the GIL. Three things are not guessable from the code:
+serialise on the GIL. Five things are not guessable from the code:
 
 - **The batch exists because of virtual loss.** A descent that reaches an unevaluated
   leaf marks its path as a loss so the next descent in the same `collect` goes elsewhere.
@@ -206,6 +206,19 @@ serialise on the GIL. Three things are not guessable from the code:
   returns no leaves *and* the simulation count did not move. Terminal positions are
   scored by the rules and never cost an evaluation; the root gets that verdict too, or a
   search from a finished game expands a node with no edges.
+- **The boundary is the buffer protocol, not lists.** `collect` returns raw f32 bytes for
+  `np.frombuffer`; `expand` takes a contiguous float32 array in one memcpy (a plain
+  sequence still works, and is what the tests use). Lists were most of a self-play ply
+  against ~3ms of GPU. Every evaluator therefore takes a numpy array and returns two.
+- **A tree outlives the move it chose.** `Mcts::advance_to` re-roots onto the position
+  reached, keeping that subtree and dropping the rest; `nn.mcts.Searcher` is the Python
+  side. It matches on **position** (hash + ply, up to 2 plies down), never on a move the
+  caller reports, so a new game or a takeback rebuilds instead of answering from the
+  wrong tree. `tree.simulations` restarts at 0 on a re-rooting — the budget is new work,
+  and `root_total_visits` is what the root inherited. Two things belong to the root
+  specifically and are re-applied rather than inherited: `set_search_root()`, and
+  self-play's Dirichlet noise, which now goes in through `set_root_priors` at
+  `nn.mcts.search`'s `root_hook` because a reused root arrives already expanded.
 
 Values are in the frame of the side to move at each node, so `backup` flips sign every
 step up the path. `tests/test_mcts.py` drives all of it against a deliberately uniform

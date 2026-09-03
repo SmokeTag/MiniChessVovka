@@ -969,6 +969,12 @@ impl PyMcts {
     #[getter]
     fn root_expanded(&self) -> bool { self.inner.root_expanded() }
 
+    /// The position the tree is rooted at, as FEN. For asserting that a re-rooting
+    /// landed where the caller thinks it did -- `advance_to` matches on a hash, and a
+    /// tree quietly rooted one move away still answers with a legal move.
+    #[getter]
+    fn root_fen(&self) -> String { fen::to_fen(self.inner.root_position()) }
+
     /// Visits standing at the root, banked ones included. `simulations` is what this
     /// search paid for; the difference is what tree reuse saved.
     #[getter]

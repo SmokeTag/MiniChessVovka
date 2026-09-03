@@ -40,6 +40,9 @@ DEFAULT_C_PUCT = 1.5
 # would only ever match after a position the searcher was never asked about.
 DEFAULT_ADVANCE_DEPTH = 2
 
+# "not given", as distinct from an explicit None, which means "no budget of this kind".
+_UNSET = object()
+
 class Evaluator:
     """A network wrapped so the search only ever hands it planes and takes back rows.
 
@@ -97,6 +100,15 @@ def search(position, evaluator, simulations=DEFAULT_SIMULATIONS,
     is terminal, or the batch stalled on a node already awaiting evaluation. Either way
     the loop must stop, or it spins.
 
+    **The stop condition is that the tree did not grow**, not that no simulation
+    happened. A descent ending on a terminal position backs up without producing work, so
+    a saturated tree -- one where every reachable leaf is already a resolved terminal --
+    keeps counting simulations forever while learning nothing: a won position under a
+    time budget spent its whole clock doing that and reported half a million simulations
+    on a 254-node tree. New nodes are the only evidence the search is still finding
+    anything, and while there are unexplored terminal children the node count still
+    climbs, so this stops later than the old condition rather than sooner.
+
     `tree` continues a tree the caller has already re-rooted (see `Searcher`), in which
     case `position` is ignored. `root_hook` is called once, as soon as the root is
     expanded and before any deeper descent -- the moment self-play's Dirichlet noise has
@@ -123,7 +135,7 @@ def search(position, evaluator, simulations=DEFAULT_SIMULATIONS,
             break
         want = batch if simulations is None else min(
             batch, max(1, simulations - tree.simulations))
-        before = tree.simulations
+        nodes_before = tree.nodes
         raw = tree.collect(want)
         if raw:
             # Zero-copy view of the bytes Rust just handed over; the array keeps them
@@ -133,10 +145,11 @@ def search(position, evaluator, simulations=DEFAULT_SIMULATIONS,
             if root_hook is not None and tree.root_expanded:
                 root_hook(tree)
                 root_hook = None
-        elif tree.simulations == before:
-            # No leaves to evaluate *and* nothing was resolved: the tree has nothing left
-            # to do, so looping again would spin. An empty batch alone is not that signal
-            # -- a descent ending on a terminal position backs up without producing work.
+        elif tree.nodes == nodes_before:
+            # No leaves to evaluate *and* not one new node: every line the tree can reach
+            # is a terminal it has already resolved. An empty batch alone is not that
+            # signal -- a descent ending on a terminal position backs up without
+            # producing work, and creates the node for it on the way.
             break
     return tree
 
@@ -179,7 +192,13 @@ class Searcher:
         reach rebuilds on its own -- but it releases the nodes at the end of a game."""
         self.tree = None
 
-    def search(self, position, simulations=None, time_limit=None, root_hook=None):
+    def search(self, position, simulations=_UNSET, time_limit=_UNSET, root_hook=None):
+        """Search `position`, reusing the tree when it can reach it.
+
+        `simulations` and `time_limit` override this searcher's own budget for one move;
+        passing `None` explicitly *removes* that budget, which is why the default is a
+        sentinel rather than None -- the GUI hands over a time and no simulation cap.
+        """
         tree = None
         if self.reuse and self.tree is not None:
             if self.tree.advance_to(position, self.advance_depth) is not None:
@@ -190,9 +209,9 @@ class Searcher:
             self.rebuilt += 1
         self.tree = search(
             position, self.evaluator,
-            simulations=self.simulations if simulations is None else simulations,
+            simulations=self.simulations if simulations is _UNSET else simulations,
             batch=self.batch, c_puct=self.c_puct,
-            time_limit=self.time_limit if time_limit is None else time_limit,
+            time_limit=self.time_limit if time_limit is _UNSET else time_limit,
             tree=tree, root_hook=root_hook)
         return self.tree
 

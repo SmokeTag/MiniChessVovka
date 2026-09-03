@@ -116,8 +116,15 @@ class _Network:
         # built with, which is why the scale is stamped into the checkpoint.
         self.value_scale = float(self.meta.get("value_scale", 400.0))
         self.evaluator = None
+        # One tree carried between moves. `Searcher` matches on the position, not on a
+        # move it was told about, so this needs no notion of a game: after the engine
+        # moves and the human replies the new position is two plies down and the subtree
+        # under it is kept, while a new game, a takeback or a loaded position simply
+        # fails to match and starts a fresh tree.
+        self.searcher = None
         self.last_simulations = 0
         self.last_nodes = 0
+        self.last_root_visits = 0
         self._warm_up(torch)
 
     def _warm_up(self, torch):
@@ -156,12 +163,14 @@ class _Network:
             seconds = DEFAULT_THINK_SECONDS
         if self.evaluator is None:
             self.evaluator = mcts.Evaluator(self.net, self.device)
+        if self.searcher is None:
+            self.searcher = mcts.Searcher(self.evaluator, batch=batch or DEFAULT_BATCH)
 
         synced = ai._sync_to_rust(gamestate)
-        tree = mcts.search(synced, self.evaluator, simulations=simulations,
-                           batch=batch or DEFAULT_BATCH, time_limit=seconds)
+        tree = self.searcher.search(synced, simulations=simulations, time_limit=seconds)
         self.last_simulations = tree.simulations
         self.last_nodes = tree.nodes
+        self.last_root_visits = tree.root_total_visits
 
         move = tree.best_move()
         if move is None:
@@ -221,6 +230,12 @@ def find_best_move(gamestate, depth=None, seconds=None, simulations=None):
 
 def last_search_stats():
     """(simulations, nodes) from the most recent search, or (0, 0). For a readout that
-    says what the time budget actually bought."""
+    says what the time budget actually bought.
+
+    `simulations` is what this move paid for. The root may stand higher than that --
+    `last_root_visits` -- because the tree is re-rooted rather than rebuilt between
+    moves; reporting the paid-for number keeps the readout an honest answer to "what did
+    that second buy".
+    """
     net = _loaded
     return (net.last_simulations, net.last_nodes) if net else (0, 0)

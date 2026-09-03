@@ -512,8 +512,20 @@ impl Mcts {
     /// against the position actually on the board.
     pub fn advance_to(&mut self, target: &GameState, max_depth: usize) -> Option<usize> {
         self.drop_pending();
+        // Shallowest first. Two lines can transpose into the same position, and the one
+        // the caller actually played is the shorter one -- taking a depth-2 transposition
+        // over the depth-1 child would give the kept tree a history through moves the
+        // game did not make. Depth-first over the whole range would do exactly that.
         let mut path = Vec::new();
-        let found = self.find_target(0, 0, max_depth, target, &mut path)?;
+        let mut found = None;
+        for depth in 0..=max_depth {
+            path.clear();
+            found = self.find_target(0, 0, depth, target, &mut path);
+            if found.is_some() {
+                break;
+            }
+        }
+        let found = found?;
         if path.is_empty() {
             return Some(0);
         }
